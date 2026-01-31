@@ -101,14 +101,14 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.github.io-s2c:s2c:0.1.0-alpha'
+    implementation 'com.github.io-s2c:s2c:0.1.2-alpha'
 }
 ```
 
 First, define your state machine:
 
 ```java
-public class CounterStateMachine extends S2CStateMachine {
+public class ReplicatedCounter extends S2CStateMachine {
 
   private final AtomicInteger counter = new AtomicInteger();
 
@@ -172,7 +172,6 @@ public class CounterStateMachine extends S2CStateMachine {
   }
 
 }
-}
 ```
 
 Then, initialize and run S2C:
@@ -189,11 +188,11 @@ S3Facade s3Facade = S3Facade.createNew(s3Client);
 
 // 2. Define Node Identity
 NodeIdentity nodeIdentity = NodeIdentity.newBuilder()
-    .setAddress("10.0.0.1")
+    .setAddress("127.0.0.1")
     .setPort(8080)
     .build();
 
-// 3. Configure S2C
+// 3. Configure S2C (optional)
 S2COptions s2cOptions = new S2COptions()
     .snapshottingThreshold(100)
     .requestTimeoutMs(10_000);
@@ -210,6 +209,8 @@ S2CNode s2cNode = S2CNode.builder()
     .s3Facade(s3Facade)
     .build();
 
+// Note that you can pass a Micrometer's Meter Registry to S2CNode and S2CServer (Make sure you pass the same instance!)
+
 // 5. Register your State Machine
 ReplicatedCounter counter = s2cNode
     .createAndRegisterStateMachine("counter", ReplicatedCounter::new);
@@ -221,7 +222,7 @@ s2cNode.start();
 // 7. Use your State Machine
 try {
 	counter.increment(); // Execution delegated to leader
-	counter.get() // Linearizable read
+	counter.get(); // Linearizable read
 } catch (ApplicationException e) {
 	// Your state machine rejected the request
 }
@@ -229,9 +230,9 @@ try {
 
 ### Status
 
-S2C is currently in alpha and should be considered experimental as it has not yet been deployed in production environments.
+S2C is currently in **alpha** and should be considered experimental as it has not yet been deployed in production environments.
 
-However, it has passed extensive chaos and fault-injection tests and has proven recovery from crashes, partitions, and leader failure. Also, formal verification is planned.
+However, it **has passed extensive chaos and fault-injection tests and has proven recovery from crashes, partitions, and leader failure**. Also, formal verification is planned.
 
 Because of this, usage and feedback are highly encouraged and appreciated.
 
