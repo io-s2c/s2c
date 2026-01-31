@@ -48,7 +48,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
     permissions:
       contents: read
       packages: write
