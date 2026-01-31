@@ -138,10 +138,8 @@ protobuf {
   
 }
 
-if(System.getenv("JITPACK") != null) {
-    tasks.withType<GenerateModuleMetadata> {
-        enabled = false
-    }
+tasks.withType<GenerateModuleMetadata> {
+    enabled = false
 }
 
 def cores = Runtime.runtime.availableProcessors()
