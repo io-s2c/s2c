@@ -1,0 +1,147 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'com.google.protobuf'
+}
+
+group = 'io.s2c'
+version = '0.1.0-alpha'
+
+ext {
+    awsSdkVersion = '2.27.21'
+    slf4jVersion = '2.0.17'
+    protobufVersion = '4.32.1'
+    micrometerVersion = '1.16.1'
+    junitVersion = '6.0.0'
+    mockitoVersion = '5.6.0'
+    log4jVersion = '2.25.1'
+    testcontainersVersion = '2.0.2'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+
+    // S3 client for Java
+    compileOnly platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+    compileOnly "software.amazon.awssdk:s3"
+
+    // Slf4j API
+    implementation "org.slf4j:slf4j-api:${slf4jVersion}"
+
+    // Protobuf
+    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+    implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
+    
+    // Micrometer
+    implementation platform("io.micrometer:micrometer-bom:${micrometerVersion}")
+    implementation 'io.micrometer:micrometer-core'
+
+    // Testing
+    testImplementation platform("org.junit:junit-bom:${junitVersion}")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testImplementation "org.junit.platform:junit-platform-suite"
+   
+    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    testImplementation "org.mockito:mockito-junit-jupiter:${mockitoVersion}"
+	
+    // Include SLF4J binding for testing only
+    testImplementation "org.apache.logging.log4j:log4j-slf4j2-impl:${log4jVersion}"
+	
+	
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+	
+    // S3 client for Java
+    testImplementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+    testImplementation "software.amazon.awssdk:s3"
+    
+    testImplementation "org.testcontainers:testcontainers-localstack:${testcontainersVersion}"
+	
+
+}
+
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
+    withJavadocJar()
+}
+
+test {    
+    // S3 backend selection: (default) 'inmemory' or 'localstack'
+    systemProperty "s3backend", project.findProperty('s3backend') ?: 'inmemory'
+    
+    useJUnitPlatform {
+        if (project.hasProperty('includeTags')) {
+            includeTags project.property('includeTags').toString().split(',')
+        }
+        if (project.hasProperty('excludeTags')) {
+            excludeTags project.property('excludeTags').toString().split(',')
+        }
+    }
+    testLogging {
+        showStandardStreams = true
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            
+            pom {
+                name = 's2c'
+                description = 'S2C: Shared Storage Consensus - An RSM implementation backed by AWS S3'
+                url = 'https://github.com/mzazaipsc/s2c'
+                
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'mzaza'
+                        name = 'mzaza'
+                    }
+                }
+                
+                scm {
+                    connection = 'scm:git:git://github.com/mzazaipsc/s2c.git'
+                    developerConnection = 'scm:git:ssh://github.com/mzazaipsc/s2c.git'
+                    url = 'https://github.com/mzazaipsc/s2c'
+                }
+            }
+        }
+    }
+
+}
+
+protobuf {
+  protoc {
+    // The artifact spec for the Protobuf Compiler
+    artifact = "com.google.protobuf:protoc:${protobufVersion}"
+  }
+  generateProtoTasks {
+    all().configureEach {
+      builtins {
+        java {}
+      }
+    }
+  }
+  
+}
+
+
+def cores = Runtime.runtime.availableProcessors()
+def parallelism = Math.max(cores, 8)
+
+tasks.withType(Test).configureEach {
+    jvmArgs "-Djdk.virtualThreadScheduler.parallelism=${parallelism}"
+}

@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package io.s2c.model;
+
+option java_package = "io.s2c.model.state";
+option java_multiple_files = true;
+option java_generate_equals_and_hash = true;
+
+
+message StateSnapshot {
+	uint64 start_apply_index = 1;
+	uint64 end_apply_index = 2;
+	uint64 leader_epoch = 3;
+	repeated StateMachineSnapshot sm_snapshots = 4;
+	repeated LastResult last_results = 5;
+}
+
+message LastResult {
+	bytes result = 1;
+	string err_msg = 2;
+	uint64 last_seq_num = 3;
+	NodeIdentity node_identity = 4;
+}
+
+message StateMachineSnapshot {
+	string sm_name = 1;
+	bytes body = 2;
+}
+
+message NodeIdentity {
+  string id = 1;
+  string address = 2;
+  int32 port = 3;
+  string az = 4;
+}
+
+message LogEntry {
+  bytes body = 1;
+  string source_sm = 2;
+  RequestId request_id = 3;
+}
+
+message RequestId {
+  NodeIdentity client_node_identity = 1;
+  uint64 client_sequence_number = 2;
+}
+
+message LogEntriesBatch {
+  repeated LogEntry log_entries = 1;
+  uint64 commit_index = 2;
+}
+
+message FollowerInfo {
+  NodeIdentity node_identity = 1;
+  uint64 apply_index = 2;
+  uint64 sequence_number = 3;
+}
+
+message LeaderState {
+  uint64 epoch = 1;
+  uint64 commit_index = 2;
+  NodeIdentity node_identity = 3;
+  repeated FollowerInfo followers = 4;
+}

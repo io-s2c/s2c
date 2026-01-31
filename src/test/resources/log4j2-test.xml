@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+	<Properties>
+		<Property name="LOG_PATTERN">
+			%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %-10thread %logger{36} (%F:%L) - %msg %X%n%throwable
+		</Property>
+	</Properties>
+
+	<Appenders>
+		<Console name="Console" target="SYSTEM_OUT">
+			<PatternLayout pattern="${LOG_PATTERN}" />
+<!--			<ThresholdFilter level="INFO" onMatch="ACCEPT" onMismatch="DENY" />-->
+		</Console>
+		<RollingFile name="FileLogger"
+					 fileName="logs/tests.log"
+					 filePattern="$logs/tests-%i.log">
+
+			<PatternLayout pattern="${LOG_PATTERN}" />
+			<Policies>
+				<SizeBasedTriggeringPolicy size="1MB"/>
+as				<DefaultRolloverStrategy max="1000"/>
+			</Policies>
+		</RollingFile>
+	</Appenders>
+
+	<Loggers>
+		<Root level="TRACE">
+			<AppenderRef ref="Console" />
+			<AppenderRef ref="FileLogger" />
+		</Root>
+	</Loggers>
+
+</Configuration>

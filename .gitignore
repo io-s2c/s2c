@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+bin/
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# IDE - Eclipse
+.classpath
+.project
+.settings/
+*.prefs
+
+# IDE - VSCode
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+docs/.DS_Store
+
+# Project-specific
+s2c-cs-cleanup.xml
+s2c-cs-formatter.xml
+
+# Logs
+*.log
+logs/

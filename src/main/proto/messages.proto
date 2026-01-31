@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package io.s2c.model;
+
+import "state.proto";
+
+option java_package = "io.s2c.model.messages";
+option java_multiple_files = true;
+option java_generate_equals_and_hash = true;
+
+
+message S2CMessage {
+  string correlation_id = 1;
+
+  oneof body {
+    StateRequest state_request = 2;
+    StateRequestResponse state_request_response = 3;
+    SynchronizeRequest synchronize_request = 4;
+    SynchronizeResponse synchronize_response = 5;
+    Follow follow = 6;
+    FollowResponse follow_response = 7;
+    Handshake handshake = 8;
+  }
+
+  oneof error {
+    NotLeaderError not_leader_error = 10;
+    LeaderStartingError leader_starting_error = 11;
+    ApplicationError application_error = 12;
+    NotFollowerError not_follower_error = 13;
+    SlowDownError slow_down_error = 14;
+    InternalError internal_error = 15;
+    RequestOutOfSequenceError request_out_of_sequence_error = 16;
+  }
+}
+
+message Handshake {
+  string groupId = 1;
+  NodeIdentity node_identity = 2;
+}
+
+message StateRequest {
+  bytes body = 1;
+  string source_sm = 2;
+  NodeIdentity source_node = 3;
+  StateRequestType type = 4;
+  string group_id = 5;
+  uint64 sequence_number = 6;
+
+  enum StateRequestType {
+    COMMAND = 0;
+    READ = 1;
+  }
+}
+
+message StateRequestResponse {
+  oneof body {
+    ApplicationResult application_result = 1;
+  }
+  oneof error {
+    ApplicationResultUnavailableError application_result_unavailable_error = 2;
+  }
+}
+
+message ApplicationResult {
+  bytes body = 1;
+}
+
+message ApplicationResultUnavailableError {
+}
+
+message FollowResponse {
+  uint64 node_sequence_number = 1;
+}
+
+message Follow {
+  uint64 apply_index = 1;
+  NodeIdentity node_identity = 2;
+  string group_id = 3;
+}
+
+message SynchronizeResponse {
+  uint64 apply_index = 1;
+}
+
+message SynchronizeRequest {
+  LogEntriesBatch batch = 1;
+  uint64 commit_index = 2;
+  string group_id = 3;
+  FollowerTooFarBehindError follower_too_far_behind_error = 4;
+}
+
+message ApplicationError {
+  string error_msg = 1;
+}
+
+message InternalError {
+  
+}
+
+message RequestOutOfSequenceError {
+  uint64 next_seq_num = 1;
+}
+
+message NotLeaderError {
+
+}
+
+message LeaderStartingError {
+
+}
+
+message NotFollowerError {
+
+}
+
+message SlowDownError {
+
+}
+
+message FollowerTooFarBehindError {
+
+}
