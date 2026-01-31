@@ -118,13 +118,6 @@ publishing {
                     url = 'https://github.com/io-s2c/s2c'
                 }
             }
-            pom.withXml {
-                asNode().dependencies.dependency.findAll {
-                    it.groupId.text() == 'com.google.protobuf'
-                }.each {
-                    it.scope[0].setValue('compile')
-                }
-            }
         }
     }
 
@@ -145,6 +138,11 @@ protobuf {
   
 }
 
+if(System.getenv("JITPACK") != null) {
+    tasks.withType<GenerateModuleMetadata> {
+        enabled = false
+    }
+}
 
 def cores = Runtime.runtime.availableProcessors()
 def parallelism = Math.max(cores, 8)
