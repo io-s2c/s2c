@@ -32,8 +32,8 @@ dependencies {
     implementation "org.slf4j:slf4j-api:${slf4jVersion}"
 
     // Protobuf
-    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
-    implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
+    api "com.google.protobuf:protobuf-java:${protobufVersion}"
+    api "com.google.protobuf:protobuf-java-util:${protobufVersion}"
     
     // Micrometer
     implementation platform("io.micrometer:micrometer-bom:${micrometerVersion}")
