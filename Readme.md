@@ -121,9 +121,9 @@ public class ReplicatedCounter extends S2CStateMachine {
         String s = snapshot.toStringUtf8();
         counter = s.isEmpty() ? 0 : Long.parseLong(s);
     }
-
+    
     @Override
-    protected ByteString handleRequest(ByteString request, StateRequestType type) {
+    protected ByteString handleRequest(ByteString request, StateRequestType type) throws ApplicationException {
         String cmd = request.toStringUtf8();
         if (cmd.equals("INC")) {
             counter++;
@@ -131,7 +131,7 @@ public class ReplicatedCounter extends S2CStateMachine {
         } else if (cmd.equals("GET")) {
             return ByteString.copyFromUtf8(String.valueOf(counter));
         }
-        throw new IllegalArgumentException("Unknown command: " + cmd);
+      	throw new ApplicationException("Unknown command %s".formatted(cmd));
     }
 
     // Command (Strongly Consistent Write)
@@ -191,8 +191,12 @@ s2cServer.start();
 s2cNode.start();
 
 // 7. Use your State Machine
-counter.increment(); // Execution delegated to leader
-counter.get() // Linearizable read
+try {
+	counter.increment(); // Execution delegated to leader
+	counter.get() // Linearizable read
+} catch (ApplicationException e) {
+	// Your state machine rejected the request
+}
 ```
 
 ### Status
