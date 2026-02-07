@@ -65,8 +65,12 @@ public class StateRequestSubmitter implements AutoCloseable {
     if (stateRequest.getSequenceNumber() < lowestSeqNum) {
       lowestSeqNum = stateRequest.getSequenceNumber();
     }
-    BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
+    BackoffCounter errorBackoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
         .build();
+    BackoffCounter unlimitedBackoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
+        .unlimited()
+        .build();
+    
     S2CMessage s2cMessage = S2CMessage.newBuilder()
         .setCorrelationId(UUID.randomUUID().toString())
         .setStateRequest(stateRequest)
@@ -84,23 +88,29 @@ public class StateRequestSubmitter implements AutoCloseable {
           long backOff = Math.max(0, stateRequest.getSequenceNumber()
               - response.getRequestOutOfSequenceError().getNextSeqNum());
           TimeUnit.MILLISECONDS.sleep(backOff);
-
           continue;
         } else if (response.hasNotLeaderError()) {
           log.debug()
               .log("Leader responded with NotLeaderError. Checking leader state then retrying");
           leaderState = leaderStateManager.checkLeaderState(leaderState);
           s2cClient.disconnect();
-          backoffCounter.reset();
+          errorBackoffCounter.reset();
           continue;
         } else if (response.hasInternalError()) {
           log.debug().log("Leader responded with internal error.");
+          unlimitedBackoffCounter.awaitNextAttempt();
+          continue;
         } else if (response.hasSlowDownError()) {
           log.debug().log("Leader responded with slow down error");
+          unlimitedBackoffCounter.awaitNextAttempt();
+          continue;
         } else if (response.hasLeaderStartingError()) {
           log.debug().log("Leader responded with leader starting error");
+          unlimitedBackoffCounter.awaitNextAttempt();
+          continue;
         } else {
-          backoffCounter.reset();
+          unlimitedBackoffCounter.reset();
+          errorBackoffCounter.reset();
           return response;
         }
       }
@@ -109,13 +119,14 @@ public class StateRequestSubmitter implements AutoCloseable {
         log.debug().log("Reconnecting...");
         if (reconnect(leaderState)) {
           log.debug().log("Reconnected successfully");
-          backoffCounter.reset();
+          errorBackoffCounter.reset();
           continue;
         } else {
           leaderState = leaderStateManager.checkLeaderState(leaderState);
           // Fail pending requests - reconnect on next iteration
           s2cClient.disconnect();
-          backoffCounter.reset();
+          unlimitedBackoffCounter.reset();
+          errorBackoffCounter.reset();
           continue;
         }
       }
@@ -126,9 +137,9 @@ public class StateRequestSubmitter implements AutoCloseable {
             .log("Request timed out.");
       }
       // If timed-out or no successful response
-      if (backoffCounter.canAttempt()) {
-        backoffCounter.enrich(log.debug()).log("Retrying..");
-        backoffCounter.awaitNextAttempt();
+      if (errorBackoffCounter.canAttempt()) {
+        errorBackoffCounter.enrich(log.debug()).log("Retrying..");
+        errorBackoffCounter.awaitNextAttempt();
       } else {
         leaderState = leaderStateManager.checkLeaderState(leaderState);
         // Fail other threads
@@ -136,7 +147,8 @@ public class StateRequestSubmitter implements AutoCloseable {
         if (!leaderStateManager.isLeader(leaderState)) {
           reconnect(leaderState);
         }
-        backoffCounter.reset();
+        unlimitedBackoffCounter.reset();
+        errorBackoffCounter.reset();
       }
     }
   }
