@@ -2,7 +2,6 @@ package io.s2c;
 
 import java.util.Collection;
 import java.util.Optional;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
@@ -28,7 +27,7 @@ import io.s2c.util.InterruptableSupplier;
 import io.s2c.util.LRUCache;
 
 public class RSM {
-  
+
   public static final String NO_ERR_MSG = "No_S2C_Err_Msg";
 
   private final Logger logger = LoggerFactory.getLogger(RSM.class);
@@ -38,8 +37,8 @@ public class RSM {
   private final S2CStateMachineRegistry s2cStateMachineRegistry;
   private final BiFunction<Long, Long, LogReplayer> logReplayerFactory;
   private final InterruptableSupplier<Optional<StateSnapshot>> stateSnapshotSupplier;
-  private final GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedNodesLastResults;
-  
+  private final GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedNodesDedups;
+
   // applyIndex is incremented only when applyLock is acquired, regardless of node's role.
   // As with commitIndex, it is incremented per batch.
   private volatile long applyIndex = 0;
@@ -48,20 +47,21 @@ public class RSM {
       S2CStateMachineRegistry s2cStateMachineRegistry,
       BiFunction<Long, Long, LogReplayer> logReplayerFactory,
       InterruptableSupplier<Optional<StateSnapshot>> stateSnapshotSupplier,
-      GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedNodesLastResults) {
+      GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedNodesLastResults) {
     log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.s2cStateMachineRegistry = s2cStateMachineRegistry;
     this.logReplayerFactory = logReplayerFactory;
     this.stateSnapshotSupplier = stateSnapshotSupplier;
-    this.guardedNodesLastResults = guardedNodesLastResults;
+    this.guardedNodesDedups = guardedNodesLastResults;
 
   }
 
-  public Optional<StateSnapshot> catchUp(long commitIndex) throws InterruptedException, ReplayerBrokenException {
+  public Optional<StateSnapshot> catchUp(long commitIndex)
+      throws InterruptedException, ReplayerBrokenException {
     applyLock.lockInterruptibly();
     try {
       log.debug().addKeyValue("commitIndex", commitIndex).log("Catching up to commitIndex");
-      var stateSnapshotOptional = restore();
+      var stateSnapshotOptional = restoreSnapshot();
       if (applyIndex < commitIndex) {
         log.debug().log("Applying committed log entries ahead of applyIndex");
         // applyIndex + 1 because applyIndex is applied already
@@ -123,6 +123,7 @@ public class RSM {
       }
       catch (ApplicationException e) {
         log.debug().setCause(e).log("Error while applying");
+        lastResultBuilder.setResult(ByteString.EMPTY);
         lastResultBuilder.setErrMsg(e.getMessage());
       }
 
@@ -131,23 +132,18 @@ public class RSM {
           .setLastSeqNum(entry.getRequestId().getClientSequenceNumber())
           .build();
 
-      guardedNodesLastResults.write(nodesLastResults -> {
-
-        OrderedLastResult currentLastResult = nodesLastResults
-            .get(entry.getRequestId().getClientNodeIdentity());
-
-        if (currentLastResult != null) {
-          if (currentLastResult.lastResult().getLastSeqNum() < newLastResult.getLastSeqNum()) {
-            nodesLastResults.put(entry.getRequestId().getClientNodeIdentity(),
-                new OrderedLastResult(newLastResult));
+      guardedNodesDedups.write(dedupUnits -> {
+        var dedupUnit = dedupUnits.get(entry.getRequestId().getClientNodeIdentity());
+        if (dedupUnit != null) {
+          if (dedupUnit.lastResult().getLastSeqNum() < newLastResult
+              .getLastSeqNum()) {
+            dedupUnits.put(entry.getRequestId().getClientNodeIdentity(),
+                new DedupUnit(newLastResult, null));
           }
         } else {
-          nodesLastResults.put(entry.getRequestId().getClientNodeIdentity(),
-              new OrderedLastResult(newLastResult));
-
+          dedupUnits.put(entry.getRequestId().getClientNodeIdentity(), new DedupUnit(newLastResult, null));
         }
-
-        return nodesLastResults;
+        return dedupUnits;
       });
     }
     applyIndex++;
@@ -171,7 +167,7 @@ public class RSM {
       applyLock.unlock();
     }
   }
-  
+
   public void awaitApply() throws InterruptedException {
     applyLock.lockInterruptibly();
     long applyIndexBeforeAwait = applyIndex;
@@ -185,14 +181,15 @@ public class RSM {
     }
   }
 
-  public StateSnapshot takeSnapshot(long lastSnapshotEndApplyIndex, long leaderEpoch) throws InterruptedException {
+  public StateSnapshot takeSnapshot(long lastSnapshotEndApplyIndex, long leaderEpoch)
+      throws InterruptedException {
     applyLock.lock();
     try {
       StateSnapshot.Builder snapshotBuilder = StateSnapshot.newBuilder();
       log.debug().addKeyValue("applyIndex", applyIndex).log("Taking snapshot");
       snapshotBuilder.setLeaderEpoch(leaderEpoch)
-      .setStartApplyIndex(lastSnapshotEndApplyIndex + 1)
-      .setEndApplyIndex(applyIndex);
+          .setStartApplyIndex(lastSnapshotEndApplyIndex + 1)
+          .setEndApplyIndex(applyIndex);
       s2cStateMachineRegistry.getAll().forEach(e -> {
         ByteString snapshotByteStr = e.snapshot();
         StateMachineSnapshot snapshot = StateMachineSnapshot.newBuilder()
@@ -202,14 +199,14 @@ public class RSM {
         snapshotBuilder.addSmSnapshots(snapshot);
       });
 
-      guardedNodesLastResults.write(nodesLastResults -> {
-        nodesLastResults.applyOnIterator(it -> {
+      guardedNodesDedups.write(dedupUnits -> {
+        dedupUnits.applyOnIterator(it -> {
           while (it.hasNext()) {
-            var orderedLastResult = it.next().getValue();
-            snapshotBuilder.addLastResults(orderedLastResult.lastResult());
+            var dedupUnit = it.next().getValue();
+            snapshotBuilder.addLastResults(dedupUnit.lastResult());
           }
         });
-        return nodesLastResults;
+        return dedupUnits;
       });
 
       log.debug().addKeyValue("applyIndex", applyIndex).log("Snapshot ready");
@@ -222,11 +219,12 @@ public class RSM {
 
   private long applySnapshot(StateSnapshot stateSnapshot) throws InterruptedException {
 
-    guardedNodesLastResults.write(nodesLastResults -> {
+    guardedNodesDedups.write(dedupUnits -> {
       stateSnapshot.getLastResultsList().forEach(lastResult -> {
-        nodesLastResults.put(lastResult.getNodeIdentity(), new OrderedLastResult(lastResult));
+        dedupUnits.put(lastResult.getNodeIdentity(),
+            new DedupUnit(lastResult, null));
       });
-      return nodesLastResults;
+      return dedupUnits;
     });
     for (StateMachineSnapshot smSnapshot : stateSnapshot.getSmSnapshotsList()) {
       S2CStateMachine s2cStateMachine = s2cStateMachineRegistry.get(smSnapshot.getSmName());
@@ -264,7 +262,10 @@ public class RSM {
         t.reqRes().response(result);
       }
       catch (ApplicationException e) {
-        log.debug().setCause(e).addKeyValue("correlationId", t.correlationId()).log("Error while applying request");
+        log.debug()
+            .setCause(e)
+            .addKeyValue("correlationId", t.correlationId())
+            .log("Error while applying request");
         t.reqRes().exception(e);
       }
 
@@ -275,6 +276,7 @@ public class RSM {
             .setLastSeqNum(t.reqRes().request().getSequenceNumber());
         if (t.reqRes().excption() != null) {
           lastResultBuilder.setErrMsg(t.reqRes().excption().getMessage());
+          lastResultBuilder.setResult(ByteString.EMPTY);
         } else {
           lastResultBuilder.setResult(t.reqRes().response());
           lastResultBuilder.setErrMsg(NO_ERR_MSG);
@@ -282,19 +284,19 @@ public class RSM {
 
         LastResult newLastResult = lastResultBuilder.build();
 
-        guardedNodesLastResults.write(nodesLastResults -> {
-          OrderedLastResult currentLastResult = nodesLastResults
+        guardedNodesDedups.write(dedupUnits -> {
+          DedupUnit dedpUnit = dedupUnits
               .get(t.reqRes().request().getSourceNode());
-          if (currentLastResult != null) {
-            if (currentLastResult.lastResult().getLastSeqNum() < newLastResult.getLastSeqNum()) {
-              nodesLastResults.put(t.reqRes().request().getSourceNode(),
-                  new OrderedLastResult(newLastResult));
+          if (dedpUnit != null) {
+            if (dedpUnit.lastResult().getLastSeqNum() < newLastResult.getLastSeqNum()) {
+              dedupUnits.put(t.reqRes().request().getSourceNode(),
+                  new DedupUnit(newLastResult, dedpUnit.eosBuffer()));
             }
           } else {
-            nodesLastResults.put(t.reqRes().request().getSourceNode(),
-                new OrderedLastResult(newLastResult));
+            dedupUnits.put(t.reqRes().request().getSourceNode(),
+                new DedupUnit(newLastResult, null));
           }
-          return nodesLastResults;
+          return dedupUnits;
         });
       }
     }
@@ -317,16 +319,16 @@ public class RSM {
     return stateMachine.handleRequest(requestBody, stateRequestType);
   }
 
-  private Optional<StateSnapshot> restore() throws InterruptedException {
+  private Optional<StateSnapshot> restoreSnapshot() throws InterruptedException {
     log.trace().log("Restoring snapshot");
     Optional<StateSnapshot> stateSnapshotOptional = stateSnapshotSupplier.get();
     if (stateSnapshotOptional.isEmpty()) {
       log.debug().log("No valid snapshot.");
       return stateSnapshotOptional;
     }
-    
+
     StateSnapshot snapshot = stateSnapshotOptional.get();
-    
+
     if (snapshot.getEndApplyIndex() <= applyIndex) {
       log.debug()
           .addKeyValue("applyIndex", applyIndex)

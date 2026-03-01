@@ -2,7 +2,6 @@ package io.s2c;
 
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -14,10 +13,7 @@ import org.slf4j.LoggerFactory;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
-import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.s2c.concurrency.GuardedValue;
-import io.s2c.concurrency.Sequencer;
 import io.s2c.concurrency.TaskExecutor;
 import io.s2c.configs.S2COptions;
 import io.s2c.error.S2CInterruptedException;
@@ -70,7 +66,7 @@ public class S2CNode implements AutoCloseable {
   private final S2CStateMachineRegistry s2cStateMachineRegistry;
   private final GuardedValue<Boolean> guardedLeaderStarting = new GuardedValue<>(false);
 
-  private final GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedNodesLastResult;
+  private final GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedNodesDedups;
 
   private volatile boolean running = false;
 
@@ -184,7 +180,7 @@ public class S2CNode implements AutoCloseable {
 
     verifyNewGroup(s2cGroupId);
 
-    guardedNodesLastResult = new GuardedValue<>(
+    guardedNodesDedups = new GuardedValue<>(
         new LRUCache<>(s2cOptions.maxDeduplicatedClients(), k -> null));
 
     this.contextProvider = new ContextProvider(s2cGroupId, nodeIdentity, s2cOptions.logNodeIdentity());
@@ -217,7 +213,7 @@ public class S2CNode implements AutoCloseable {
         objectWriterFactory, contextProvider, meterRegistry);
 
     this.rsm = new RSM(contextProvider, s2cStateMachineRegistry, s2cLog::replay,
-        snapshotStorageManager::download, guardedNodesLastResult);
+        snapshotStorageManager::download, guardedNodesDedups);
 
     this.leaderStateManager = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
         s2cOptions, contextProvider, s2cClientCurriedFactory.apply(ClientRole.IS_ALIVE_CHECKER),
@@ -229,8 +225,8 @@ public class S2CNode implements AutoCloseable {
     this.stateRequestHandler = new StateRequestHandler(contextProvider,
         s2cOptions.flushIntervalMs(), s2cOptions.batchMinCount(), leaderStateManager,
         synchronizeManager::syncCommit, rsm::applyBatch, s2cLog,
-        leaderStateManager::handleConcurrentStateModificationException, guardedNodesLastResult,
-        meterRegistry);
+        leaderStateManager::handleConcurrentStateModificationException, guardedNodesDedups,
+        s2cOptions.s2cExactlyOnceOptions(), meterRegistry);
 
     this.snapshottingWorker = new SnapshottingWorker(leaderStateManager, contextProvider,
         snapshotStorageManager, rsm, leaderStateManager::handleConcurrentStateModificationException,
@@ -250,10 +246,11 @@ public class S2CNode implements AutoCloseable {
         stateRequestHandler, asyncBatchApplier, rsm::applyIndex, this::tooFarBehindHanlder,
         leaderStateManager::handleConcurrentStateModificationException, ni -> {
           AtomicReference<Optional<Long>> seqNumOptionalReference = new AtomicReference<>();
-          guardedNodesLastResult.read(nodesLastResults -> {
-            var result = nodesLastResults.get(ni);
-            if (result != null) {
-              seqNumOptionalReference.set(Optional.of(result.lastResult().getLastSeqNum()));
+          guardedNodesDedups.read(dedupUnits -> {
+            var dedupUnit = dedupUnits.get(ni);
+            if (dedupUnit != null) {
+              seqNumOptionalReference
+                  .set(Optional.of(dedupUnit.lastResult().getLastSeqNum()));
             } else {
               seqNumOptionalReference.set(Optional.empty());
             }

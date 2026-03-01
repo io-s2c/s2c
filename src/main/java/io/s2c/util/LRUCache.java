@@ -43,7 +43,11 @@ public class LRUCache<K, V> {
     return map.get(key);
 
   }
-
+  
+  public void clear() {
+    map.clear();
+  }
+  
   public void applyOnIterator(Consumer<Iterator<Entry<K, V>>> iteratorConsumer) {
     synchronized (map) {
       iteratorConsumer.accept(map.entrySet().iterator());

@@ -125,7 +125,6 @@ publishing {
 
 protobuf {
   protoc {
-    // The artifact spec for the Protobuf Compiler
     artifact = "com.google.protobuf:protoc:${protobufVersion}"
   }
   generateProtoTasks {
@@ -140,11 +139,4 @@ protobuf {
 
 tasks.withType(GenerateModuleMetadata).configureEach {
     enabled = false
-}
-
-def cores = Runtime.runtime.availableProcessors()
-def parallelism = Math.max(cores, 8)
-
-tasks.withType(Test).configureEach {
-    jvmArgs "-Djdk.virtualThreadScheduler.parallelism=${parallelism}"
 }

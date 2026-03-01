@@ -284,7 +284,8 @@ class ConsensusTest {
       executorService.execute(() -> {
         try {
           l.await();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
         int i = 0;
@@ -302,7 +303,8 @@ class ConsensusTest {
         executorService.execute(() -> {
           try {
             l.await();
-          } catch (InterruptedException e) {
+          }
+          catch (InterruptedException e) {
             Thread.currentThread().interrupt();
           }
           assertDoesNotThrow(() -> {
@@ -432,7 +434,8 @@ class ConsensusTest {
         try {
           shutdownNode1();
           latch.countDown();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
       });
@@ -440,12 +443,14 @@ class ConsensusTest {
       executorService.execute(() -> {
         try {
           latch.await();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
         try {
           counterStateMachine1.increment();
-        } catch (ApplicationException e) {
+        }
+        catch (ApplicationException e) {
           cause.set(e.getCause());
         }
       });
@@ -476,7 +481,8 @@ class ConsensusTest {
         try {
           latch.countDown();
           shutdownNode1();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
       });
@@ -484,14 +490,16 @@ class ConsensusTest {
       executorService.execute(() -> {
         try {
           latch.await();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
         try {
           // Must retry till succeeds (as a leader because now single node)
           counterStateMachine2.increment();
 
-        } catch (ApplicationException e) {
+        }
+        catch (ApplicationException e) {
           cause.set(e.getCause());
         }
       });
@@ -527,7 +535,8 @@ class ConsensusTest {
         try {
           latch.await();
           shutdownNode1();
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
       });
@@ -540,7 +549,8 @@ class ConsensusTest {
         while (i < 10) {
           try {
             counterStateMachine2.increment();
-          } catch (ApplicationException e) {
+          }
+          catch (ApplicationException e) {
             cause.set(e.getCause());
           }
           i++;
@@ -615,23 +625,27 @@ class ConsensusTest {
 
             try {
               startedDroppingAll.await();
-            } catch (InterruptedException e) {
+            }
+            catch (InterruptedException e) {
               Thread.currentThread().interrupt();
             }
 
             try {
+              // Retry till becomes leader
               counterStateMachine2.increment();
-            } catch (ApplicationException e) {
+              // Node1 started drop message, so we became leader
+              if (s2cNode2.isLeader()) {
+                node2BecameLeaderLatch.countDown();
+              }
+            }
+            catch (ApplicationException | InterruptedException | S2CStoppedException e) {
               cause.set(e);
             }
 
           } else {
             assertDoesNotThrow(() -> {
               counterStateMachine2.increment();
-              // Node1 started drop message, so we became leader
-              if (s2cNode2.isLeader()) {
-                node2BecameLeaderLatch.countDown();
-              }
+
             });
 
           }
@@ -689,9 +703,11 @@ class ConsensusTest {
           node2IsLeader.set(assertDoesNotThrow(() -> s2cNode2.isLeader()));
           assertTrue(node2IsLeader.get());
 
-        } catch (InterruptedException e) {
+        }
+        catch (InterruptedException e) {
           Thread.currentThread().interrupt();
-        } catch (ApplicationException e) {
+        }
+        catch (ApplicationException e) {
           cause.set(e);
 
         }
@@ -741,7 +757,8 @@ class ConsensusTest {
       S3Exception ex = null;
       try {
         s3Facade.getObject(keysResolver.logEntryKey(j.get()), bucket);
-      } catch (S3Exception e) {
+      }
+      catch (S3Exception e) {
         ex = e;
       }
       assertNotNull(ex);
@@ -767,58 +784,55 @@ class ConsensusTest {
 
   }
 
-  // @Test
-  // void testFaultInjectedSyncrhonizationKeepsOrdering()
-  // throws IOException, InterruptedException, S2CStoppedException,
-  // ApplicationException {
+  @Test
+  void testFaultInjectedSyncrhonizationKeepsOrdering()
+      throws IOException, InterruptedException, S2CStoppedException, ApplicationException {
 
-  // initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
-  // StateMachine.APPENDER);
+    initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+        StateMachine.APPENDER);
 
-  // boolean node1Leader = s2cNode1.isLeader();
-  // assertTrue(node1Leader);
+    boolean node1Leader = s2cNode1.isLeader();
+    assertTrue(node1Leader);
 
-  // initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
-  // () -> 3,
-  // Set.of(Failure.DROP, Failure.IO_EXCEPTION), m -> {
-  // }), StateMachine.APPENDER);
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
+        Set.of(Failure.DROP, Failure.IO_EXCEPTION), m -> {
+        }), StateMachine.APPENDER);
 
-  // boolean node2Ledaer = s2cNode2.isLeader();
-  // assertFalse(node2Ledaer);
+    boolean node2Ledaer = s2cNode2.isLeader();
+    assertFalse(node2Ledaer);
 
-  // AtomicInteger i = new AtomicInteger(1);
-  // while (i.get() <= 10) {
-  // assertDoesNotThrow(() -> {
-  // appenderStateMachine1.append(i.get() + "");
-  // });
-  // i.incrementAndGet();
-  // }
+    AtomicInteger i = new AtomicInteger(1);
+    while (i.get() <= 10) {
+      assertDoesNotThrow(() -> {
+        appenderStateMachine1.append(i.get() + "");
+      });
+      i.incrementAndGet();
+    }
 
-  // String node1value = appenderStateMachine1.value();
+    String node1value = appenderStateMachine1.value();
 
-  // AtomicReference<ByteString> snapshot = new
-  // AtomicReference<>(appenderStateMachine2.snapshot());
+    AtomicReference<ByteString> snapshot = new AtomicReference<>(appenderStateMachine2.snapshot());
 
-  // AtomicReference<String> node2Value = new AtomicReference<>(
-  // snapshot.get().toString(StandardCharsets.UTF_8));
+    AtomicReference<String> node2Value = new AtomicReference<>(
+        snapshot.get().toString(StandardCharsets.UTF_8));
 
-  // TestUtil.sleepUntil(300, 500, () -> {
+    TestUtil.sleepUntil(300, 500, () -> {
 
-  // snapshot.set(appenderStateMachine2.snapshot());
-  // node2Value.set(snapshot.get().toString(StandardCharsets.UTF_8));
+      snapshot.set(appenderStateMachine2.snapshot());
+      node2Value.set(snapshot.get().toString(StandardCharsets.UTF_8));
 
-  // return node2Value.get().equals(node1value);
-  // });
+      return node2Value.get().equals(node1value);
+    });
 
-  // assertEquals(node1value, node2Value.get());
+    assertEquals(node1value, node2Value.get());
 
-  // node1Leader = s2cNode1.isLeader();
-  // assertTrue(node1Leader);
+    node1Leader = s2cNode1.isLeader();
+    assertTrue(node1Leader);
 
-  // node2Ledaer = s2cNode2.isLeader();
-  // assertFalse(node2Ledaer);
+    node2Ledaer = s2cNode2.isLeader();
+    assertFalse(node2Ledaer);
 
-  // }
+  }
 
   @Test
   void testSynchronizationOfTooFarBehindFollower()

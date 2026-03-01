@@ -41,6 +41,7 @@ public class S2COptions {
 
   private S2CNetworkOptions s2cNetworkOptions;
   private S2CRetryOptions s2cRetryOptions;
+  private S2CExactlyOnceOptions s2cExactlyOnceOptions;
 
   public S2COptions() {
     snapshottingThreshold = SNAPSHOTTING_THRESHOLD;
@@ -57,6 +58,7 @@ public class S2COptions {
     maxBatchesPendingForApply = MAX_BATCHES_PENDING_FOR_APPLY;
     s2cNetworkOptions = new S2CNetworkOptions();
     s2cRetryOptions = new S2CRetryOptions();
+    s2cExactlyOnceOptions = new S2CExactlyOnceOptions();
   }
 
   public int snapshottingThreshold() {
@@ -163,6 +165,10 @@ public class S2COptions {
 
   public S2CRetryOptions s2cRetryOptions() {
     return s2cRetryOptions;
+  }
+  
+  public S2CExactlyOnceOptions s2cExactlyOnceOptions() {
+    return s2cExactlyOnceOptions;
   }
   
   public boolean logNodeIdentity() {
