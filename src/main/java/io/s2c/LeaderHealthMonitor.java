@@ -86,7 +86,7 @@ public class LeaderHealthMonitor implements Task {
         if (e instanceof InterruptedException) {
           Thread.currentThread().interrupt();
         }
-        stopQuietly();
+        break;
       }
     }
 
@@ -100,13 +100,4 @@ public class LeaderHealthMonitor implements Task {
   public void close() throws InterruptedException {
     running = false;
   }
-
-  private void stopQuietly() {
-    try {
-      close();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
 }

@@ -318,6 +318,7 @@ public class S2CNode implements AutoCloseable {
     log.info().log("Stopping S2CNode");
     leaderStateManager.close(); // Propagates S2CStoppedException
     stateRequestHandler.close();
+    leaderHealthMonitor.close();
     s2cGroupServer.close();
     taskExecutor.close();
     s2cLog.close();
