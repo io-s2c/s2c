@@ -98,6 +98,7 @@ public class LeaderHealthMonitor implements Task {
 
   @Override
   public void close() throws InterruptedException {
+    registerHeartbeat(POISON_PILL);
     running = false;
   }
 }
