@@ -87,6 +87,8 @@ class ConsensusTest {
   S2CGroupRegistry s2cGroupRegistry1 = new S2CGroupRegistry();
   S2COptions s2cOptions = new S2COptions()
       .s2cRetryOptions(new S2CRetryOptions().baseDelayMS(100).maxDelaySeconds(1))
+      .maxMissedHeartbeats(1000) // We don't want to trigger state transition while dropping
+      // messages
       .logNodeIdentity(true)
       .snapshottingThreshold(10);
   S2CNode s2cNode2;
@@ -360,10 +362,9 @@ class ConsensusTest {
   void testNodeCanStartWhenLeaderBusy() throws IOException, InterruptedException {
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
-        
-   
+
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
-      
+
       int j = 0;
       while (j < 100) {
         executorService.execute(() -> {
@@ -381,7 +382,7 @@ class ConsensusTest {
     }
 
     shutdownNode1();
-    
+
     boolean node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
 
     assertFalse(node2IsLeader);
@@ -768,7 +769,7 @@ class ConsensusTest {
       assertEquals(ex.awsErrorDetails().errorCode(), S3Error.KEY_NOT_FOUND.errorCode());
       j.incrementAndGet();
     }
-    
+
     while (j.get() <= commitIndex) {
       assertDoesNotThrow(() -> s3Facade.getObject(keysResolver.logEntryKey(j.get()), bucket));
       j.incrementAndGet();
@@ -791,8 +792,7 @@ class ConsensusTest {
   @Test
   void testFaultInjectedSyncrhonizationKeepsOrdering()
       throws IOException, InterruptedException, S2CStoppedException, ApplicationException {
-    
-    
+
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.APPENDER);
 
