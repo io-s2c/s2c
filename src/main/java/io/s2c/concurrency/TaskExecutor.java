@@ -55,7 +55,7 @@ public class TaskExecutor implements Executor, AutoCloseable {
     }
 //    executorService = Executors.newThreadPerTaskExecutor(
 //        Thread.ofVirtual().uncaughtExceptionHandler(uncaughtExceptionHandler).factory());
-    executorService = Executors.newFixedThreadPool(100);
+    executorService = Executors.newFixedThreadPool(1000);
     this.owner = owner;
     this.maxConcurrency = maxConcurrency;
     if (maxConcurrency < Integer.MAX_VALUE) {
