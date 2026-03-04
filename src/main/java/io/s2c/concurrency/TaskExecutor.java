@@ -53,9 +53,8 @@ public class TaskExecutor implements Executor, AutoCloseable {
     if (maxConcurrency <= 0) {
       throw new IllegalArgumentException("maxConcurrency must be greater than zero");
     }
-//    executorService = Executors.newThreadPerTaskExecutor(
-//        Thread.ofVirtual().uncaughtExceptionHandler(uncaughtExceptionHandler).factory());
-    executorService = Executors.newFixedThreadPool(1000);
+    executorService = Executors.newThreadPerTaskExecutor(
+        Thread.ofVirtual().uncaughtExceptionHandler(uncaughtExceptionHandler).factory());
     this.owner = owner;
     this.maxConcurrency = maxConcurrency;
     if (maxConcurrency < Integer.MAX_VALUE) {

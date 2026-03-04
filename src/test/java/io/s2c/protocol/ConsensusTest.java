@@ -357,12 +357,13 @@ class ConsensusTest {
   }
 
   @Test
-  void testNodeDoesCatchUpConcurrently() throws IOException, InterruptedException {
+  void testNodeCanStartWhenLeaderBusy() throws IOException, InterruptedException {
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
-
+        
+   
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
-
+      
       int j = 0;
       while (j < 100) {
         executorService.execute(() -> {
@@ -380,10 +381,14 @@ class ConsensusTest {
     }
 
     shutdownNode1();
+    
+    boolean node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
+
+    assertFalse(node2IsLeader);
 
     int value2 = assertDoesNotThrow(() -> counterStateMachine2.get());
 
-    boolean node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
+    node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
 
     assertEquals(100, value2);
     assertTrue(node2IsLeader);

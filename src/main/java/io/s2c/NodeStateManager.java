@@ -22,6 +22,7 @@ import io.s2c.concurrency.Task;
 import io.s2c.concurrency.TaskExecutor;
 import io.s2c.configs.S2COptions;
 import io.s2c.error.ConnectTimeoutException;
+import io.s2c.error.LeadersInternalErrorException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.Follow;
@@ -29,7 +30,6 @@ import io.s2c.model.messages.S2CMessage;
 import io.s2c.model.state.LeaderState;
 import io.s2c.model.state.NodeIdentity;
 import io.s2c.network.S2CClient;
-import io.s2c.network.error.ClientConnectingException;
 import io.s2c.network.error.ClientNotConnectedException;
 import io.s2c.network.error.ClientStoppedException;
 import io.s2c.network.error.UnknownHostException;
@@ -261,6 +261,13 @@ public class NodeStateManager implements Task {
     BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
         .build();
 
+    BackoffCounter unlimitedBackoffCounter = BackoffCounter
+        .withRetryOptions(s2cOptions.s2cRetryOptions())
+        .unlimited()
+        .build();
+    
+    BackoffCounter selectedBackoffCounter = backoffCounter;
+    
     if (s2cClient.isReady()) {
       s2cClient.disconnect(); // Disconnect from last leader
     }
@@ -277,13 +284,18 @@ public class NodeStateManager implements Task {
         return true;
       }
       catch (UnknownHostException | ConnectTimeoutException | IOException
-          | ClientNotConnectedException | ClientConnectingException | TimeoutException e) {
+          | ClientNotConnectedException | TimeoutException | LeadersInternalErrorException e) {
         log.debug().setCause(e).log("Error while attempting to connect to current leader.");
+        if (e instanceof LeadersInternalErrorException) {
+          selectedBackoffCounter = unlimitedBackoffCounter;
+        } else {
+          selectedBackoffCounter = backoffCounter;
+        }
       }
-
-      if (backoffCounter.canAttempt()) {
-        backoffCounter.awaitNextAttempt();
-        backoffCounter.enrich(log.debug()).log("Retrying");
+      
+      if (selectedBackoffCounter.canAttempt()) {
+        selectedBackoffCounter.enrich(log.debug()).log("Retrying");
+        selectedBackoffCounter.awaitNextAttempt();
         continue;
       }
       backoffCounter.enrich(log.debug())
@@ -329,7 +341,7 @@ public class NodeStateManager implements Task {
   }
 
   private void tryFollow() throws InterruptedException, S2CStoppedException, ClientStoppedException,
-      ClientNotConnectedException, ClientConnectingException, TimeoutException, IOException {
+      ClientNotConnectedException, TimeoutException, IOException, LeadersInternalErrorException {
 
     LeaderState leaderState = leaderStateManager.getLeaderState();
 
@@ -346,10 +358,14 @@ public class NodeStateManager implements Task {
     // operations before receiving follow response.
     S2CMessage res = sendFollow(followMessage);
     log.debug().addKeyValue("response", res::toString).log("Leader responded");
+
     if (res != null && res.hasFollowResponse()) {
       nodeSequenceNumber.set(res.getFollowResponse().getNodeSequenceNumber());
       log.debug().log("Node is follower.");
+    } else if (res != null && res.hasInternalError()) {
+      throw new LeadersInternalErrorException();
     } else {
+
       // This should never happen
       throw new IllegalStateException("Invalid response from leader");
     }
