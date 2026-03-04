@@ -2,16 +2,17 @@ package io.s2c.protocol;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.time.Duration;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.AfterEach;
@@ -24,14 +25,17 @@ import com.google.protobuf.ByteString;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.s2c.ContextProvider;
+import io.s2c.DedupUnit;
 import io.s2c.LeaderStateManager;
-import io.s2c.OrderedLastResult;
+import io.s2c.RSM;
 import io.s2c.S2CLog;
 import io.s2c.StateRequestHandler;
 import io.s2c.concurrency.GuardedValue;
 import io.s2c.configs.S2COptions;
+import io.s2c.error.ApplicationResultUnavailableException;
 import io.s2c.error.RequestOutOfSequenceException;
 import io.s2c.error.S2CStoppedException;
+import io.s2c.error.StateRequestException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.StateRequest;
 import io.s2c.model.messages.StateRequest.StateRequestType;
@@ -60,20 +64,24 @@ class StateRequestHandlingTest {
 
   private S2CLog s2cLog;
 
-  private S2COptions s2cOptions = new S2COptions();
   private final String bucket = "s2cbucket";
   private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
   private final ContextProvider contextProvider = new ContextProvider("group", nodeIdentity, false);
-  private final AtomicLong stateMachine = new AtomicLong();
+  private final AtomicInteger stateMachine = new AtomicInteger();
   private final AtomicLong applyIndex = new AtomicLong();
 
-  private final GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedValuenodesLastResults = new GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>>(
+  private final StringBuilder seqNumsStr = new StringBuilder();
+  
+  private final GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedDedupUnits = new GuardedValue<LRUCache<NodeIdentity, DedupUnit>>(
       new LRUCache<>(1000, n -> null));
 
   @BeforeEach
   void setUp() {
 
     S3Facade s3Facade = S3Facade.createNewInMemory(bucket);
+
+    S2COptions s2cOptions = new S2COptions();
+    s2cOptions.s2cExactlyOnceOptions().outOfSeqBufferSize(20);
 
     Function<StructuredLogger, ObjectReader> objectReaderFactory = l -> new ObjectReader(s3Facade,
         bucket, l, s2cOptions.s2cRetryOptions());
@@ -86,46 +94,48 @@ class StateRequestHandlingTest {
         }, () -> S2CMessageReader.create(s2cOptions.maxMessageSize()), ClientRole.IS_ALIVE_CHECKER),
         () -> 0L, meterRegistry);
 
-    s2cLog = new S2CLog(objectReaderFactory, objectWriterFactory, contextProvider, new S2COptions(), meterRegistry);
+    s2cLog = new S2CLog(objectReaderFactory, objectWriterFactory, contextProvider, s2cOptions,
+        meterRegistry);
 
     stateRequestHandler = new StateRequestHandler(contextProvider, s2cOptions.flushIntervalMs(),
         s2cOptions.batchMinCount(), leaderStateManager, l -> {
         }, b -> {
           b.batch().forEach(r -> {
-            if (r.reqRes().request().getType().equals(StateRequestType.COMMAND)) {
+            if (r.reqRes().request().getType() == StateRequestType.COMMAND) {
               stateMachine.incrementAndGet();
+              seqNumsStr.append(stateMachine.get() + "-");
             }
-
-            r.reqRes().response(ByteString.EMPTY);
-
+            ByteString result = ByteString
+                .copyFrom(ByteBuffer.allocate(Integer.SIZE).putInt(stateMachine.get()).flip());
             LastResult newLastResult = LastResult.newBuilder()
                 .setLastSeqNum(r.reqRes().request().getSequenceNumber())
-                .setResult(ByteString.EMPTY)
+                .setResult(result)
+                .setErrMsg(RSM.NO_ERR_MSG)
                 .build();
 
-            guardedValuenodesLastResults.write(nodesLastResults -> {
-              OrderedLastResult currentLastResult = nodesLastResults
-                  .get(r.reqRes().request().getSourceNode());
-              if (currentLastResult != null) {
-                if (currentLastResult.lastResult().getLastSeqNum() < newLastResult
-                    .getLastSeqNum()) {
-                  nodesLastResults.put(r.reqRes().request().getSourceNode(),
-                      new OrderedLastResult(newLastResult));
+            guardedDedupUnits.write(dedupUnits -> {
+              var dedupUnit = dedupUnits.get(r.reqRes().request().getSourceNode());
+              if (dedupUnit != null) {
+                if (dedupUnit.lastResult().getLastSeqNum() < newLastResult.getLastSeqNum()) {
+                  dedupUnits.put(r.reqRes().request().getSourceNode(),
+                      new DedupUnit(newLastResult, dedupUnit.eosBuffer()));
                 }
               } else {
-                nodesLastResults.put(r.reqRes().request().getSourceNode(),
-                    new OrderedLastResult(newLastResult));
+                dedupUnits.put(r.reqRes().request().getSourceNode(),
+                    new DedupUnit(newLastResult, null));
               }
-              return nodesLastResults;
+              return dedupUnits;
             });
+            r.reqRes().response(result);
 
           });
           if (b.requestsType() == StateRequestType.COMMAND) {
             applyIndex.incrementAndGet();
           }
+
           return applyIndex.get();
         }, s2cLog, leaderStateManager::handleConcurrentStateModificationException,
-        guardedValuenodesLastResults, meterRegistry);
+        guardedDedupUnits, s2cOptions.s2cExactlyOnceOptions(), meterRegistry);
   }
 
   @AfterEach
@@ -150,72 +160,129 @@ class StateRequestHandlingTest {
 
     t3.start();
 
-    long time = System.currentTimeMillis();
+    long shouldNextSeqNum = -1;
+
+    StateRequest outsideSlidingWindowRequest = StateRequest.newBuilder()
+        .setSourceNode(nodeIdentity)
+        .setBody(ByteString.EMPTY)
+        .setType(StateRequestType.COMMAND)
+        .setSequenceNumber(21)
+        .build();
+
+    try {
+      stateRequestHandler.handle(UUID.randomUUID().toString(), outsideSlidingWindowRequest);
+    }
+    catch (StateRequestException | InterruptedException | RequestOutOfSequenceException e) {
+      if (e instanceof RequestOutOfSequenceException re) {
+        shouldNextSeqNum = re.nextSeqNum();
+      }
+    }
+
+    assertEquals(1, shouldNextSeqNum);
+
     AtomicLong seqNum = new AtomicLong();
-
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
-      Future<?> commands = executorService.submit(() -> {
-        int i = 0;
-        while (i < 20) {
-          StateRequest stateRequest = StateRequest.newBuilder()
-              .setBody(ByteString.EMPTY)
-              .setType(StateRequestType.COMMAND)
-              .setSequenceNumber(seqNum.incrementAndGet())
-              .build();
 
-          executorService.execute(() -> {
-            assertDoesNotThrow(() -> {
-              while (true) {
-                try {
-                  stateRequestHandler.handle(UUID.randomUUID().toString(), stateRequest);
-                  break;
-                } catch (RequestOutOfSequenceException e) {
-                  TimeUnit.MILLISECONDS.sleep(stateRequest.getSequenceNumber());
-                  continue;
-                }
-              }
+      int i = 0;
 
-            });
+      while (i < 20) {
+        StateRequest.Builder stateRequestBuilder = StateRequest.newBuilder()
+            .setSourceNode(nodeIdentity)
+            .setBody(ByteString.EMPTY)
+            .setType(StateRequestType.COMMAND);
 
+        executorService.submit(() -> {
+          assertDoesNotThrow(() -> {
+            // We set the seq num only when the request is actually sent, to prevent deterministic
+            // order of submission.. Also we send in reverse order
+            var stateRequest = stateRequestBuilder.setSequenceNumber(20 - seqNum.getAndIncrement())
+                .build();
+            stateRequestHandler.handle(UUID.randomUUID().toString(), stateRequest);
           });
-          i++;
-        }
-      });
+        });
+        i++;
+      }
 
-      Future<?> reads = executorService.submit(() -> {
-        int i = 0;
-        while (i < 20) {
-          StateRequest stateRequest = StateRequest.newBuilder()
-              .setBody(ByteString.EMPTY)
-              .setType(StateRequestType.READ)
-              .build();
-          executorService.execute(() -> {
-            assertDoesNotThrow(() -> {
-              stateRequestHandler.handle(UUID.randomUUID().toString(), stateRequest);
-            });
+      int j = 0;
+      while (j < 20) {
+        StateRequest stateRequest = StateRequest.newBuilder()
+            .setBody(ByteString.EMPTY)
+            .setSourceNode(nodeIdentity)
+            .setType(StateRequestType.READ)
+            .build();
+
+        executorService.submit(() -> {
+          assertDoesNotThrow(() -> {
+            stateRequestHandler.handle(UUID.randomUUID().toString(), stateRequest);
           });
-          i++;
-        }
-      });
 
-      reads.get();
-      commands.get();
+        });
+        j++;
+      }
 
     }
+
+    StateRequest resultUnavailableRequest = StateRequest.newBuilder()
+        .setSourceNode(nodeIdentity)
+        .setBody(ByteString.EMPTY)
+        .setType(StateRequestType.COMMAND)
+        .setSequenceNumber(19)
+        .build();
+
+    assertThrows(ApplicationResultUnavailableException.class, () -> {
+      stateRequestHandler.handle(UUID.randomUUID().toString(), resultUnavailableRequest);
+    });
+
+
+    StateRequest lastResultRequest = StateRequest.newBuilder()
+        .setSourceNode(nodeIdentity)
+        .setBody(ByteString.EMPTY)
+        .setType(StateRequestType.COMMAND)
+        .setSequenceNumber(20)
+        .build();
+
+    final long stateMachineValue = stateMachine.get();
+    long applyIndexBefore = applyIndex.get();
+    // This should not throw but also not cause a new application
+    AtomicReference<ByteString> resultRef = new AtomicReference<>();
+    assertDoesNotThrow(() -> {
+      ByteString result = stateRequestHandler.handle(UUID.randomUUID().toString(),
+          lastResultRequest);
+      resultRef.set(result);
+    });
+
+    // Assert state machine value was not changed
+    assertEquals(stateMachineValue, stateMachine.get());
+    // Assert applyIndex was not incremented
+    assertEquals(applyIndexBefore, applyIndex.get());
+    // Assert if we retry the last request, we receive the cached result
+    assertEquals(20, resultRef.get().asReadOnlyByteBuffer().getInt());
+    
     stateRequestHandler.close();
     t3.interrupt();
     long commitIndex = leaderStateManager.getLeaderState().getCommitIndex();
-    
+
     assertEquals(meterRegistry.find("state.request.committed.batches.count").counter().count(),
         commitIndex);
 
     assertEquals(20, stateMachine.get());
-    int i = 1;
+    int ii = 1;
     KeysResolver keysResolver = new KeysResolver(contextProvider.s2cGroupId());
-    while (i <= commitIndex) {
-      Optional<LogEntriesBatch> batch = s2cLog.getBatchAt(keysResolver.logEntryKey(i));
+    while (ii <= commitIndex) {
+      Optional<LogEntriesBatch> batch = s2cLog.getBatchAt(keysResolver.logEntryKey(ii));
       assertEquals(true, batch.isPresent());
-      i++;
+      ii++;
     }
+    Optional<LogEntriesBatch> batch = s2cLog.getBatchAt(keysResolver.logEntryKey(ii));
+    assertEquals(false, batch.isPresent()); // 21 should not exist
+    
+    StringBuilder expectedSeqNumOrdering = new StringBuilder();
+    
+    int seq = 1;
+    while (seq <= 20) {
+      expectedSeqNumOrdering.append(seq + "-");
+      seq++;
+    }
+    assertEquals(expectedSeqNumOrdering.toString(), seqNumsStr.toString());
   }
 }

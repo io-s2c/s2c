@@ -1,10 +1,10 @@
 package io.s2c;
-import java.util.Set;
+import java.util.List;
 
 import io.s2c.StateRequestHandler.TraceableStateRequest;
 import io.s2c.model.messages.StateRequest.StateRequestType;
 
 public record CommittedBatch(
-    Set<TraceableStateRequest> batch,
+    List<TraceableStateRequest> batch,
     StateRequestType requestsType, long commitIndex) {
 }

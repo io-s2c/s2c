@@ -1,6 +1,7 @@
 package io.s2c;
 
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 import io.s2c.concurrency.Task;
@@ -11,8 +12,11 @@ class LogReplayer implements Task {
   private final LogEntriesBatch POISON_PILL = LogEntriesBatch.newBuilder().build();
 
   private final Function<Long, LogEntriesBatch> batchDownloader;
+  private final ReentrantLock lock = new ReentrantLock();
 
   static class ReplayerBrokenException extends Exception {
+    private static final long serialVersionUID = 3476576439630887952L;
+
     public ReplayerBrokenException(Throwable cause) {
       super(cause);
     }
@@ -76,19 +80,26 @@ class LogReplayer implements Task {
     }
   }
 
-  public synchronized LogEntriesBatch next() throws InterruptedException, ReplayerBrokenException {
-    if (lastConsumed > (to - from) || !running) {
-      return null;
+  public LogEntriesBatch next() throws InterruptedException, ReplayerBrokenException {
+    lock.lock();
+    try {
+      if (lastConsumed > (to - from) || !running) {
+        return null;
+      }
+      if (replayerBrokenException != null) {
+        throw replayerBrokenException;
+      }
+      var batch = downloaded.take();
+      if (batch == POISON_PILL) {
+        return null;
+      }
+      lastConsumed++;
+      return batch;
     }
-    if (replayerBrokenException != null) {
-      throw replayerBrokenException;
+    finally {
+      lock.unlock();
     }
-    var batch = downloaded.take();
-    if (batch == POISON_PILL) {
-      return null;
-    }
-    lastConsumed++;
-    return batch;
+
   }
 
   public long downloadIndex() {

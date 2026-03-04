@@ -42,7 +42,7 @@ public class ClientMessageAcceptor implements AutoCloseable {
       MeterRegistry meterRegistry) {
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(ClientMessageAcceptor.class),
-        log.uncaughtExceptionLogger(), 200, meterRegistry);
+        log.uncaughtExceptionLogger(), maxConcurreny, meterRegistry);
     this.clientMessageHandler = clientMessageHandler;
     this.meterRegistry = meterRegistry;
     this.out = new LinkedBlockingQueue<>(maxPendingResponses);

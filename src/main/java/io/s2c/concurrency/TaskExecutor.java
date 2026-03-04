@@ -180,7 +180,7 @@ public class TaskExecutor implements Executor, AutoCloseable {
     }
     finally {
       try {
-        if (!this.executorService.awaitTermination(10L, TimeUnit.SECONDS)) {
+        if (!this.executorService.awaitTermination(100L, TimeUnit.MILLISECONDS)) {
           this.executorService.shutdownNow();
         }
       }

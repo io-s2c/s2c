@@ -1,9 +1,8 @@
 package io.s2c;
 
-import java.util.Comparator;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +25,7 @@ import io.s2c.concurrency.GuardedValue;
 import io.s2c.concurrency.RequestResponseTask;
 import io.s2c.concurrency.Task;
 import io.s2c.concurrency.TaskExecutor;
+import io.s2c.configs.S2CExactlyOnceOptions;
 import io.s2c.error.ApplicationException;
 import io.s2c.error.ApplicationResultUnavailableException;
 import io.s2c.error.ConcurrentStateModificationException;
@@ -53,7 +53,7 @@ public class StateRequestHandler implements Task {
 
   @FunctionalInterface
   interface BatchHandler {
-    void accept(Set<TraceableStateRequest> batch) throws InterruptedException, S2CStoppedException;
+    void accept(List<TraceableStateRequest> batch) throws InterruptedException, S2CStoppedException;
   }
 
   private static final TraceableStateRequest POISON_PILL = new TraceableStateRequest(null, null);
@@ -71,12 +71,10 @@ public class StateRequestHandler implements Task {
   private Timer commandHandleLatency;
   private final LeaderStateManager leaderStateManager;
   private final StructuredLogger log;
-  private final ContextProvider contextProvider;
   private final ReentrantLock handleLock = new ReentrantLock();
   private final Logger logger = LoggerFactory.getLogger(StateRequestHandler.class);
   private final TaskExecutor taskExecutor;
 
-  private MeterRegistry meterRegistry;
   private final BlockingQueue<TraceableStateRequest> readsQueue = new LinkedBlockingQueue<>();
 
   private volatile boolean running = false;
@@ -84,7 +82,9 @@ public class StateRequestHandler implements Task {
 
   private final Consumer<Long> synchronizer;
 
-  private final GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedNodesLastResults;
+  private final GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedNodesDedups;
+
+  private final S2CExactlyOnceOptions s2cExactlyOnceOptions;
 
   public StateRequestHandler(ContextProvider contextProvider,
       int flushIntervalMs,
@@ -94,9 +94,9 @@ public class StateRequestHandler implements Task {
       Function<CommittedBatch, Long> batchApplier,
       S2CLog s2cLog,
       ConcurrentStateModificationExceptionHandler concurrentStateModificationExceptionHandler,
-      GuardedValue<LRUCache<NodeIdentity, OrderedLastResult>> guardedNodesLastResults,
+      GuardedValue<LRUCache<NodeIdentity, DedupUnit>> guardedNodesDedups,
+      S2CExactlyOnceOptions s2cExactlyOnceOptions,
       MeterRegistry meterRegistry) {
-    this.contextProvider = contextProvider;
     log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.batchMinCount = batchMinCount;
     this.flushIntervalMs = flushIntervalMs;
@@ -107,8 +107,8 @@ public class StateRequestHandler implements Task {
     this.concurrentStateModificationExceptionHandler = concurrentStateModificationExceptionHandler;
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(StateRequestHandler.class),
         log.uncaughtExceptionLogger(), meterRegistry);
-    this.guardedNodesLastResults = guardedNodesLastResults;
-    this.meterRegistry = meterRegistry;
+    this.guardedNodesDedups = guardedNodesDedups;
+    this.s2cExactlyOnceOptions = s2cExactlyOnceOptions;
     initMetrics(contextProvider, meterRegistry);
 
   }
@@ -124,81 +124,73 @@ public class StateRequestHandler implements Task {
 
     TraceableStateRequest req = new TraceableStateRequest(correlationId,
         new RequestResponseTask<>(stateRequest));
-    try {
 
-      ByteString response = null;
-      Timer.Sample sample = null;
-      if (stateRequest.getType() == StateRequestType.COMMAND) {
-        AtomicBoolean accepted = new AtomicBoolean(false);
-        AtomicBoolean outOfSeq = new AtomicBoolean(false);
-        AtomicLong nextSeqNum = new AtomicLong();
-        guardedNodesLastResults.write(nodesLastResults -> {
-          OrderedLastResult lastResult = nodesLastResults
-              .get(req.reqRes().request().getSourceNode());
-          if (lastResult != null) {
-            if (lastResult.lastResult().getLastSeqNum() == 0) {
-              // Received but not processed yet
-              nextSeqNum.set(lastResult.nextSeqNum());
-              outOfSeq.set(true);
-            } else if (req.reqRes().request().getSequenceNumber() == lastResult.lastResult()
-                .getLastSeqNum()) {
-              if (!lastResult.lastResult().getErrMsg().equals(RSM.NO_ERR_MSG)) {
-                req.reqRes()
-                    .exception(new ApplicationException(lastResult.lastResult().getErrMsg()));
-              } else {
-                req.reqRes().response(lastResult.lastResult().getResult());
-              }
-            } else if (req.reqRes().request().getSequenceNumber() < lastResult.lastResult()
-                .getLastSeqNum()) {
-              req.reqRes().exception(new ApplicationResultUnavailableException());
-            } else if (req.reqRes().request().getSequenceNumber() != lastResult.nextSeqNum()) {
-              outOfSeq.set(true);
-              nextSeqNum.set(lastResult.nextSeqNum());
-              log.debug()
-                  .addKeyValue("seqNum", req.reqRes().request().getSequenceNumber())
-                  .addKeyValue("nextSeqNum", lastResult.nextSeqNum())
-                  .log("Skipping out of sequence request");
+    ByteString response = null;
+    Timer.Sample sample = null;
+    if (stateRequest.getType() == StateRequestType.COMMAND) {
+
+      AtomicBoolean accepted = new AtomicBoolean(false);
+      AtomicBoolean added = new AtomicBoolean();
+      AtomicBoolean outOfSeq = new AtomicBoolean(false);
+      AtomicLong nextSeqNum = new AtomicLong();
+
+      guardedNodesDedups.write(dedupUnits -> {
+        DedupUnit dedupUnit = dedupUnits.get(req.reqRes().request().getSourceNode());
+        if (dedupUnit != null) {
+          if (dedupUnit.eosBuffer() == null) {
+            dedupUnit = new DedupUnit(dedupUnit.lastResult(),
+                newEOSBuffer(dedupUnit.lastResult().getLastSeqNum() + 1));
+            dedupUnits.put(req.reqRes().request().getSourceNode(), dedupUnit);
+          }
+          if (req.reqRes().request().getSequenceNumber() == dedupUnit.lastResult()
+              .getLastSeqNum()) {
+            if (!dedupUnit.lastResult().getErrMsg().equals(RSM.NO_ERR_MSG)) {
+              req.reqRes().exception(new ApplicationException(dedupUnit.lastResult().getErrMsg()));
             } else {
-              lastResult.nextSeqNum(req.reqRes().request().getSequenceNumber() + 1);
-              accepted.set(true);
+              req.reqRes().response(dedupUnit.lastResult().getResult());
             }
+          } else if (req.reqRes().request().getSequenceNumber() < dedupUnit.lastResult()
+              .getLastSeqNum()) {
+            req.reqRes().exception(new ApplicationResultUnavailableException());
           } else {
-            // First request from a client must have seqNum=1
-            if (req.reqRes().request().getSequenceNumber() != 1L) {
-              nextSeqNum.set(1);
+            added.set(dedupUnit.eosBuffer().add(req));
+            if (!added.get()) {
               outOfSeq.set(true);
-            } else {
-              nodesLastResults.put(req.reqRes().request().getSourceNode(),
-                  new OrderedLastResult(LastResult.newBuilder().setLastSeqNum(0).build()));
-              accepted.set(true);
+              nextSeqNum.set(dedupUnit.eosBuffer().minSequenceNumber());
             }
           }
-          return nodesLastResults;
-        });
-        if (outOfSeq.get()) {
-          throw new RequestOutOfSequenceException(nextSeqNum.get());
+        } else {
+          // First request from a client must have seqNum=1
+          var lastResult = LastResult.newBuilder()
+              .setNodeIdentity(req.reqRes().request().getSourceNode())
+              .setLastSeqNum(0)
+              .build();
+          var queue = newEOSBuffer(1L);
+          dedupUnit = new DedupUnit(lastResult, queue);
+          dedupUnits.put(req.reqRes().request().getSourceNode(), dedupUnit);
+          added.set(queue.add(req));
+          if (!added.get()) {
+            outOfSeq.set(true);
+            nextSeqNum.set(dedupUnit.eosBuffer().minSequenceNumber());
+          } else {
+            accepted.set(true);
+          }
         }
-        if (accepted.get()) {
-
-          commandsQueue.put(req);
-        }
-        sample = Timer.start();
-        response = req.reqRes.await();
-
-      } else {
-        readsQueue.put(req);
-        sample = Timer.start();
-        response = req.reqRes.await();
+        return dedupUnits;
+      });
+      if (outOfSeq.get()) {
+        
+        throw new RequestOutOfSequenceException(nextSeqNum.get());
       }
-      sample.stop(timer(stateRequest.getType()));
-      return response;
+      sample = Timer.start();
+      response = req.reqRes.await();
+    } else {
+      readsQueue.put(req);
+      sample = Timer.start();
+      response = req.reqRes.await();
     }
-    catch (InterruptedException e) {
-      log.debug().setCause(e).log("Interrupted");
-      close();
-      Thread.currentThread().interrupt();
-      throw e;
-    }
+    sample.stop(timer(stateRequest.getType()));
+    return response;
 
   }
 
@@ -242,7 +234,7 @@ public class StateRequestHandler implements Task {
     }
   }
 
-  private void handleCommands(Set<TraceableStateRequest> commands)
+  private void handleCommands(List<TraceableStateRequest> commands)
       throws InterruptedException, S2CStoppedException {
     LeaderState leaderState = leaderStateManager.getLeaderState();
     if (!leaderStateManager.isLeader(leaderState)) {
@@ -253,11 +245,6 @@ public class StateRequestHandler implements Task {
     log.trace().log("Handling pending batched state requests");
     LogEntriesBatch.Builder commandsBatchBuilder = LogEntriesBatch.newBuilder();
     commands.forEach(c -> {
-
-      if (c.reqRes().request().getSequenceNumber() == 1
-          && c.reqRes().request().getSourceNode().getPort() == 7777) {
-        log.info();
-      }
 
       RequestId requestId = RequestId.newBuilder()
           .setClientNodeIdentity(c.reqRes().request().getSourceNode())
@@ -311,7 +298,7 @@ public class StateRequestHandler implements Task {
                   .formatted(applyIndex, leaderStateManager.getLeaderState().getCommitIndex()));
         }
         sample.stop(applicationLatencyCommand);
-        // Synchronize async to followers
+        // Asynchronously synch to followers
         synchronizer.accept(commitIndex);
         log.trace()
             .addKeyValue("commitIndex", commitIndex)
@@ -326,25 +313,17 @@ public class StateRequestHandler implements Task {
       });
       concurrentStateModificationExceptionHandler.accept(e);
 
-      guardedNodesLastResults.write(nodesLastResults -> {
+      // Clear dedupUnits because stepped down as leader
+      guardedNodesDedups.write(dedupUnits -> {
 
-        commands.stream()
-            .collect(Collectors.groupingBy(c -> c.reqRes().request().getSourceNode()))
-            .entrySet()
-            .forEach(entry -> {
-              OrderedLastResult lastResult = nodesLastResults.get(entry.getKey());
-              if (lastResult != null) {
-                entry.getValue()
-                    .stream()
-                    .sorted(Comparator.comparingLong(t -> t.reqRes().request().getSequenceNumber()))
-                    .findFirst()
-                    .ifPresent(t -> {
-                      lastResult.nextSeqNum(t.reqRes().request().getSequenceNumber());
-                    });
-              }
-            });
+        dedupUnits.applyOnIterator(it -> {
+          while (it.hasNext()) {
+            var next = it.next();
+            next.getValue().resetBuffer();
+          }
+        });
 
-        return nodesLastResults;
+        return dedupUnits;
 
       });
 
@@ -354,12 +333,12 @@ public class StateRequestHandler implements Task {
     }
   }
 
-  private void handleReads(Set<TraceableStateRequest> reads)
+  private void handleReads(List<TraceableStateRequest> reads)
       throws InterruptedException, S2CStoppedException {
-    Set<TraceableStateRequest> copyReads = reads.stream()
+    List<TraceableStateRequest> copyReads = reads.stream()
         .map(r -> new TraceableStateRequest(r.correlationId(),
             new RequestResponseTask<>(r.reqRes().request())))
-        .collect(Collectors.toSet());
+        .toList();
     LeaderState leaderState = leaderStateManager.getLeaderState();
     if (!leaderStateManager.isLeader(leaderState)) {
       log.debug().log("Cannot flush batch as node is not leader.");
@@ -439,16 +418,15 @@ public class StateRequestHandler implements Task {
   private void startBatchingLoop(BlockingQueue<TraceableStateRequest> requestsQueue,
       BatchHandler batchHandler) {
 
-    Set<TraceableStateRequest> batch = new HashSet<>();
+    List<TraceableStateRequest> batch = new ArrayList<>();
     while (running) {
 
       long startTime = System.nanoTime();
       while (true) {
+
         long remainingWaitTime = remainingWaitTime(startTime);
+
         try {
-          if (contextProvider.nodeIdentity().getPort() == 7777) {
-            log.info();
-          }
           var req = requestsQueue.poll(remainingWaitTime, TimeUnit.NANOSECONDS);
 
           if (req == POISON_PILL) {
@@ -469,7 +447,6 @@ public class StateRequestHandler implements Task {
                 try {
                   batchHandler.accept(batch);
                   batch.clear();
-                  break;
                 }
                 finally {
                   handleLock.unlock();
@@ -477,6 +454,7 @@ public class StateRequestHandler implements Task {
               } // Otherwise accumulate more while waiting
 
             }
+            break;
           }
         }
         catch (InterruptedException | S2CStoppedException e) {
@@ -489,6 +467,17 @@ public class StateRequestHandler implements Task {
         }
       }
     }
+  }
+
+  private EOSBuffer newEOSBuffer(long minSequenceNumber) {
+    return new EOSBuffer(s2cExactlyOnceOptions.outOfSeqBufferSize(), minSequenceNumber, r -> {
+      try {
+        commandsQueue.put(r);
+      }
+      catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    }, s2cExactlyOnceOptions.outOfSeqBufferSize(), taskExecutor);
   }
 
   private long timeAwaited(long remainingTime) {
