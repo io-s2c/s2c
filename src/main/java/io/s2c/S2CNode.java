@@ -353,7 +353,7 @@ public class S2CNode implements AutoCloseable {
     taskExecutor.start("node-state-manager", nodeStateManager);
     taskExecutor.start("state-requests-handler", stateRequestHandler);
     taskExecutor.start("snapshotting-worker", snapshottingWorker);
-    taskExecutor.start("leader-health-monitor", leaderHealthMonitor);
+//    taskExecutor.start("leader-health-monitor", leaderHealthMonitor);
   }
 
   private ClientMessageAcceptor newClientMessageAcceptor() {
