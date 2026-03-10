@@ -1,7 +1,8 @@
 
-# S2C Deep Dive
+# S2C Design Document
 
-Welcome to S2C's deep dive guide. This document aims to provide a comprehensive deep dive into S2C's internals.
+
+Welcome to the S2C's design document. This document aims to provide a comprehensive deep dive into the protocol, architecture, and internals.
 
 ---
 
