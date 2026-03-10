@@ -201,13 +201,17 @@ S2C has a built-in mechanism for exactly-once semantics[^4] for command requests
 
 Command requests are packed with a sequence number that is used for deduplication. Each node is assigned a unique sequence number that is durable with log. The sequence number is incremented and updated after each command request is applied to the RSM. The sequence number is used to ensure that each command request is applied exactly once to the RSM. The application result of the last command (i.e. the command that has the highest sequence number) is stored as part of the log. When a client retries a command, the leader checks if the command has already been applied by checking the sequence number. If it has, it determines next step based on the sequence number of the command:
 
-1. If the sequence number of the command is equal to the sequence number of the last command, the leader responds with the application result of the last command to the client without committing or re-applying it to the RSM, if the command was already applied, otherwise the leader responds with `RequestOutOfSequenceError` which indicates the client should retry later until the request is processed.
+The leader maintains a bounded buffer per client, where the buffer maintains a sliding acceptance window defined by the interval *[m, m+s)*, where *m* is the minimum expected sequence number and s is the buffer capacity.
 
-2. If the sequence number of the command is less than the sequence number of the last command, the leader responds with `ApplicationResultUnavailableError` which indicates that the command was already processed. The handling of this error is left to the state machine implementation. For example, an atomic replicated counter implementation can handle this error by returning the current value of the counter to the caller.
+A sequence number *n* is buffered if and only if *m <= n < m+s*.
 
-3. If the sequence number of the command is equal to the sequence number of the last command plus one, the leader processes the command as usual.
+The sequence number of the last applied command is always *m-1*.
 
-4. If the sequence number of the command is greater than the sequence number of the last command plus one, the leader responds with `RequestOutOfSequenceError` which indicates the client should retry the request later, until the preceding commands have been processed.
+If the sequence number *n* of the command is equal to *m-1*, the leader responds with the application result of the last command to the client without buffering, committing, or re-applying it to the RSM.
+
+If the sequence number *n* of the command is less than *m-1*, the leader responds with `ApplicationResultUnavailableError` which indicates that the command was already processed. The handling of this error is left to the state machine implementation. For example, an atomic replicated counter implementation can handle this error by returning the current value of the counter to the caller.
+
+If the sequence number of the command is >= *m+s*, the leader responds with `RequestOutOfSequenceError` which indicates the client should retry the request later, until the preceding commands have been processed.
 
 Note that given the sequence numbers of each client along with their last results are stored as part of the log, a new leader can recover the deduplication state of the cluster after crash or failover.
 

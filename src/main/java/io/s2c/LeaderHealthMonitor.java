@@ -2,13 +2,11 @@ package io.s2c;
 
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Predicate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.s2c.concurrency.Awaiter;
-import io.s2c.concurrency.Sequencer;
 import io.s2c.concurrency.Task;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
