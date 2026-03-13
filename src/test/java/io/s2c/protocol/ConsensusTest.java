@@ -80,12 +80,13 @@ class ConsensusTest {
       .setAddress("127.0.0.1")
       .setPort(8888)
       .build();
+
   S2CNode s2cNode1;
   S2CServer s2cServer1;
   CounterStateMachine counterStateMachine1;
   StringAppender appenderStateMachine1;
-  S2CGroupRegistry s2cGroupRegistry1 = new S2CGroupRegistry();
   S2COptions s2cOptions = new S2COptions()
+
       .s2cRetryOptions(new S2CRetryOptions().baseDelayMS(100).maxDelaySeconds(1))
       .maxMissedHeartbeats(1000) // We don't want to trigger state transition while dropping
       // messages
@@ -95,7 +96,6 @@ class ConsensusTest {
   S2CServer s2cServer2;
   CounterStateMachine counterStateMachine2;
   StringAppender appenderStateMachine2;
-  S2CGroupRegistry s2cGroupRegistry2 = new S2CGroupRegistry();
 
   private enum StateMachine {
     COUNTER, APPENDER, COUNTER_AND_APPENDER
@@ -143,7 +143,7 @@ class ConsensusTest {
         .bucket(bucket)
         .nodeIdentity(nodeIdentity1)
         .s2cGroupId(group)
-        .s2cGroupRegistry(s2cGroupRegistry1)
+        .s2cGroupRegistry(new S2CGroupRegistry())
         .s2cMessageReaderFactory(messageReaderFactory)
         .s2cOptions(s2cOptions.snapshottingThreshold(10))
         .s2cServer(s2cServer1)
@@ -174,7 +174,7 @@ class ConsensusTest {
         .bucket(bucket)
         .nodeIdentity(nodeIdentity2)
         .s2cGroupId(group)
-        .s2cGroupRegistry(s2cGroupRegistry2)
+        .s2cGroupRegistry(new S2CGroupRegistry())
         .s2cMessageReaderFactory(messageReaderFactory)
         .s2cOptions(s2cOptions.snapshottingThreshold(10))
         .s2cServer(s2cServer2)
@@ -575,7 +575,7 @@ class ConsensusTest {
   }
 
   @Test
-  void testCommandExactlyOnceSuccedsWhenLeaderUnreacheable()
+  void testfollowerAttemptsLeadershipWhenLeaderUnreacheable()
       throws IOException, InterruptedException {
 
     AtomicBoolean dropAll = new AtomicBoolean();
@@ -588,7 +588,7 @@ class ConsensusTest {
         startedDroppingAll.countDown();
         return 1;
       } else {
-        return 0;
+        return 2;
       }
     }, Set.of(Failure.DROP), m -> {
     }), StateMachine.COUNTER);
@@ -658,31 +658,6 @@ class ConsensusTest {
         }
       });
 
-      // Do some random decrements to stress
-
-      executorService.execute(() -> {
-
-        int i = 0;
-        while (i < 3) {
-          assertDoesNotThrow(() -> {
-            counterStateMachine2.decrement();
-          });
-
-          i++;
-        }
-      });
-
-      executorService.execute(() -> {
-
-        int i = 0;
-        while (i < 4) {
-          assertDoesNotThrow(() -> {
-            counterStateMachine2.decrement();
-          });
-          i++;
-        }
-      });
-
       executorService.execute(() -> {
         try {
 
@@ -717,9 +692,107 @@ class ConsensusTest {
         }
       });
     }
-    int value = assertDoesNotThrow(() -> counterStateMachine1.get());
+
+    int value = assertDoesNotThrow(() -> counterStateMachine2.get());
     assertNull(cause.get());
-    assertEquals(20 + 1 - 3 - 4, value);
+    assertEquals(20 + 1, value);
+
+  }
+
+  @Test
+  void testCommandsExecutesExactlyOnceDuringChaos() throws IOException, InterruptedException {
+
+    long previousMaxAttempts = s2cOptions.s2cRetryOptions().maxAttempts();
+    s2cOptions.s2cRetryOptions().maxAttempts(100); // to not attempt leadership
+
+    initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+        StateMachine.COUNTER);
+
+    AtomicBoolean node1IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
+      return s2cNode1.isLeader();
+    }));
+
+    assertTrue(node1IsLeader.get());
+    
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
+        Set.of(Failure.DROP), m -> {
+        }), StateMachine.COUNTER);
+
+    AtomicBoolean node2IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
+      return s2cNode2.isLeader();
+    }));
+
+    assertFalse(node2IsLeader.get());
+
+    AtomicInteger totalOps = new AtomicInteger();
+
+    CountDownLatch shutDownLeaderLatch = new CountDownLatch(1);
+
+    int threads = 4;
+    int opsPerThread = 5;
+    try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
+      for (int i = 0; i < threads; i++) {
+        executorService.execute(() -> {
+          int j = 0;
+          while (j < opsPerThread) {
+            assertDoesNotThrow(() -> {
+              counterStateMachine2.increment();
+            });
+            j++;
+            totalOps.incrementAndGet();
+            if (totalOps.get() > (threads * opsPerThread) / 2) {
+              shutDownLeaderLatch.countDown();
+            }
+          }
+        });
+      }
+      executorService.execute(() -> {
+        try {
+          shutDownLeaderLatch.await();
+          shutdownNode1();
+          // We ensure exactly-once state can be restored
+          assertDoesNotThrow(() -> {
+            initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+                StateMachine.COUNTER);
+          });
+
+        }
+        catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      });
+
+    }
+
+    shutdownNode2();
+    
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
+        Set.of(Failure.DROP), m -> {
+        }), StateMachine.COUNTER);
+
+    // We ensure follower receives the correct sequence number after restarting
+    assertDoesNotThrow(() -> {
+      counterStateMachine2.increment();
+    });
+
+    int counterValue = assertDoesNotThrow(() -> counterStateMachine1.get());
+
+    node1IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
+      return s2cNode1.isLeader();
+    }));
+
+    assertTrue(node1IsLeader.get());
+
+    node2IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
+      return s2cNode2.isLeader();
+    }));
+
+    assertFalse(node2IsLeader.get());
+
+    // +1 last op after follower restart
+    assertEquals(totalOps.get() + 1, counterValue);
+
+    s2cOptions.s2cRetryOptions().maxAttempts(previousMaxAttempts); // reset
 
   }
 

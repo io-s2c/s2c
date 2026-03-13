@@ -86,6 +86,7 @@ public class StateRequestHandler implements Task {
 
   private final S2CExactlyOnceOptions s2cExactlyOnceOptions;
 
+
   public StateRequestHandler(ContextProvider contextProvider,
       int flushIntervalMs,
       int batchMinCount,
@@ -179,7 +180,6 @@ public class StateRequestHandler implements Task {
         return dedupUnits;
       });
       if (outOfSeq.get()) {
-        
         throw new RequestOutOfSequenceException(nextSeqNum.get());
       }
       sample = Timer.start();
@@ -256,6 +256,7 @@ public class StateRequestHandler implements Task {
           .setRequestId(requestId)
           .build();
       commandsBatchBuilder.addLogEntries(entryProto);
+
     });
     try {
 
@@ -356,8 +357,9 @@ public class StateRequestHandler implements Task {
       leaderStateManager.updateCommitIndex(commitIndex);
 
       Map<String, TraceableStateRequest> readsMap = reads.stream()
-          .collect(Collectors.toMap(r -> r.correlationId(), Function.identity()));
-
+          .collect(Collectors.toMap(r -> r.correlationId(), Function.identity(), (t1, t2) -> {
+            return t1;
+          }));
       copyReads.forEach(req -> {
         var originalRead = readsMap.get(req.correlationId());
         if (req.reqRes().excption() != null) {

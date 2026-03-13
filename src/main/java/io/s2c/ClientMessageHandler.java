@@ -113,44 +113,51 @@ public class ClientMessageHandler {
   public S2CMessage handleFollow(String correlationId, Follow follow) {
     S2CMessage.Builder builder = S2CMessage.newBuilder().setCorrelationId(correlationId);
     concurrentFollowHandling.incrementAndGet();
-    try {
-      FollowerInfo followerInfo = FollowerInfo.newBuilder()
-          .setNodeIdentity(follow.getNodeIdentity())
-          .setApplyIndex(follow.getApplyIndex())
-          .build();
-      LeaderState leaderState = leaderStateManager.getLeaderState();
-      if (!leaderStateManager.isLeader(leaderState)) {
-        rejectedFollowRequests.increment();
-        return builder.setNotLeaderError(NotLeaderError.getDefaultInstance()).build();
+    guardedLeaderStarting.read(leaderStarting -> {
+      if (leaderStarting) {
+        builder.setLeaderStartingError(LeaderStartingError.getDefaultInstance());
+        return;
       }
-      var logBuilder = log.debug()
-          .addKeyValue("correlationId", correlationId)
-          .addKeyValue("followerNodeIdentity", follow.getNodeIdentity());
-      if (leaderStateManager.addNewFollower(followerInfo)) {
-        synchronizeManager.syncFollower(followerInfo);
-        logBuilder.log("Follower added");
-        succeededFollowRequests.increment();
-      } else {
-        logBuilder.log("Follower already exists");
-        duplicateFollowRequests.increment();
+      try {
+        FollowerInfo followerInfo = FollowerInfo.newBuilder()
+            .setNodeIdentity(follow.getNodeIdentity())
+            .setApplyIndex(follow.getApplyIndex())
+            .build();
+        LeaderState leaderState = leaderStateManager.getLeaderState();
+        if (!leaderStateManager.isLeader(leaderState)) {
+          rejectedFollowRequests.increment();
+          builder.setNotLeaderError(NotLeaderError.getDefaultInstance());
+          return;
+        }
+        var logBuilder = log.debug()
+            .addKeyValue("correlationId", correlationId)
+            .addKeyValue("followerNodeIdentity", follow.getNodeIdentity());
+        if (leaderStateManager.addNewFollower(followerInfo)) {
+          synchronizeManager.syncFollower(followerInfo);
+          logBuilder.log("Follower added");
+          succeededFollowRequests.increment();
+        } else {
+          logBuilder.log("Follower already exists");
+          duplicateFollowRequests.increment();
+        }
+        // We fallback to zero - zero is never a valid seq num as client must send nextSeqNum
+        // (nextSeqNum=lastSeqNum + 1)
+        Long seqNum = clientSequenceNumberProvider.apply(follow.getNodeIdentity()).orElse(0L);
+        // Respond a follow response for either new or existing follower
+        builder.setFollowResponse(FollowResponse.newBuilder().setNodeSequenceNumber(seqNum));
       }
-      // We fallback to zero - zero is never a valid seq num as client must send nextSeqNum
-      // (nextSeqNum=lastSeqNum + 1)
-      Long seqNum = clientSequenceNumberProvider.apply(follow.getNodeIdentity()).orElse(0L);
-      // Respond a follow response for either new or existing follower
-      return builder.setFollowResponse(FollowResponse.newBuilder().setNodeSequenceNumber(seqNum))
-          .build();
-    }
-    catch (InterruptedException | S2CStoppedException e) {
-      if (e instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
+      catch (InterruptedException | S2CStoppedException e) {
+        if (e instanceof InterruptedException) {
+          Thread.currentThread().interrupt();
+        }
+        log.debug().setCause(e).log("Error while handling follow request");
+        builder.setInternalError(InternalError.getDefaultInstance());
       }
-      log.debug().setCause(e).log("Error while handling follow request");
-      return builder.setInternalError(InternalError.getDefaultInstance()).build();
-    }
-    finally {
-      concurrentFollowHandling.decrementAndGet();
-    }
+      finally {
+        concurrentFollowHandling.decrementAndGet();
+      }
+    });
+    return builder.build();
   }
 
   public S2CMessage handleStateRequest(String correlationId, StateRequest stateRequest) {
@@ -167,11 +174,6 @@ public class ClientMessageHandler {
         logBuilder.log("Cannot handle because not leader");
         rejectedStateRequestsNotLeader.increment();
         messageBuilder.setNotLeaderError(NotLeaderError.getDefaultInstance());
-      } else if (!leaderStateManager.isFollower(stateRequest.getSourceNode())
-          && !stateRequest.getSourceNode().equals(leaderState.getNodeIdentity())) {
-        logBuilder.log("Cannot handle because source node is not follower");
-        rejectedStateRequestsNotFollower.increment();
-        messageBuilder.setNotFollowerError(NotFollowerError.getDefaultInstance());
       } else {
         guardedLeaderStarting.read(leaderStarting -> {
           if (leaderStarting) {
@@ -180,6 +182,15 @@ public class ClientMessageHandler {
             rejectedStateRequestsLeaderStarting.increment();
             return;
           }
+          
+          if (!leaderStateManager.isFollower(stateRequest.getSourceNode())
+              && !stateRequest.getSourceNode().equals(leaderState.getNodeIdentity())) {
+            logBuilder.log("Cannot handle because source node is not follower");
+            rejectedStateRequestsNotFollower.increment();
+            messageBuilder.setNotFollowerError(NotFollowerError.getDefaultInstance());
+            return;
+          }
+          
           // NodeStateManager is awaiting on RWSequencer to catch up
           // This can otherwise not be true, given the application awaits on this thread
 
@@ -232,9 +243,10 @@ public class ClientMessageHandler {
       succeededStateRequests.increment();
     }
     catch (StateRequestException e) {
-      log.error()
+      log.debug()
+          .setCause(e)
           .addKeyValue("correlationId", correlationId)
-          .log("Error while handling state request", e);
+          .log("Error while handling state request");
       switch (e) {
       case CommitException ex -> {
         if (ex instanceof ConcurrentStateModificationException ex1) {

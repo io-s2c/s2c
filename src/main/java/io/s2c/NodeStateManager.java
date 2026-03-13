@@ -360,9 +360,11 @@ public class NodeStateManager implements Task {
     log.debug().addKeyValue("response", res::toString).log("Leader responded");
 
     if (res != null && res.hasFollowResponse()) {
-      nodeSequenceNumber.set(res.getFollowResponse().getNodeSequenceNumber());
+      if (nodeSequenceNumber.get() == 0) {
+        nodeSequenceNumber.set(res.getFollowResponse().getNodeSequenceNumber());
+      }
       log.debug().log("Node is follower.");
-    } else if (res != null && res.hasInternalError()) {
+    } else if (res != null && (res.hasInternalError() || res.hasLeaderStartingError())) {
       throw new LeadersInternalErrorException();
     } else {
 

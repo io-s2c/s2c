@@ -139,6 +139,8 @@ public class RSM {
               .getLastSeqNum()) {
             dedupUnits.put(entry.getRequestId().getClientNodeIdentity(),
                 new DedupUnit(newLastResult, null));
+          } else {
+            throw new IllegalStateException("seq num of newLastResult must be greater than seq num of lastResult");
           }
         } else {
           dedupUnits.put(entry.getRequestId().getClientNodeIdentity(), new DedupUnit(newLastResult, null));

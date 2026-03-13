@@ -108,6 +108,10 @@ public class StateRequestSubmitter implements AutoCloseable {
           log.debug().log("Leader responded with leader starting error");
           unlimitedBackoffCounter.awaitNextAttempt();
           continue;
+        } else if (response.hasNotFollowerError()) { // This can happen when the same leader node has restarted
+          log.debug().log("Leader responded with not follower error, resetting leader state");
+          leaderStateManager.resetLeaderState();
+          continue;
         } else {
           unlimitedBackoffCounter.reset();
           errorBackoffCounter.reset();
