@@ -8,7 +8,9 @@ import com.google.protobuf.ByteString;
 
 import io.s2c.S2CStateMachine;
 import io.s2c.error.ApplicationException;
+import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.model.messages.StateRequest.StateRequestType;
+import io.s2c.model.state.S2CGroupStatus;
 import io.s2c.model.messages.StateRequestResponse;
 
 public class CounterStateMachine extends S2CStateMachine {
@@ -49,7 +51,7 @@ public class CounterStateMachine extends S2CStateMachine {
     return ByteString.copyFrom(buf.array());
   }
 
-  public Integer increment() throws ApplicationException {
+  public Integer increment() throws ApplicationException, S2CNodeStoppedException, InterruptedException {
     StateRequestResponse response = sendToLeader(ByteString.copyFrom(INCREMENT, StandardCharsets.UTF_8),
         StateRequestType.COMMAND);
     int val = 0;
@@ -65,7 +67,7 @@ public class CounterStateMachine extends S2CStateMachine {
 
 
 
-  public Integer decrement() throws ApplicationException {
+  public Integer decrement() throws ApplicationException, S2CNodeStoppedException, InterruptedException {
     StateRequestResponse response = sendToLeader(ByteString.copyFrom(DECREMENT, StandardCharsets.UTF_8),
         StateRequestType.COMMAND);
     int val = 0;
@@ -79,7 +81,7 @@ public class CounterStateMachine extends S2CStateMachine {
     return val;
   }
 
-  public Integer get() throws ApplicationException {
+  public Integer get() throws ApplicationException, S2CNodeStoppedException, InterruptedException {
     StateRequestResponse response = sendToLeader(ByteString.copyFrom(GET, StandardCharsets.UTF_8),
         StateRequestType.READ);
     int val = 0;
@@ -89,6 +91,10 @@ public class CounterStateMachine extends S2CStateMachine {
       handleInvalidReadResponse();
     }
     return val;
+  }
+  
+  public S2CGroupStatus getS2SGroupStatus() throws S2CNodeStoppedException, InterruptedException {
+    return s2cGroupStatus();
   }
 
 }

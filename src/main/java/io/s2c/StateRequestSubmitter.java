@@ -52,7 +52,7 @@ public class StateRequestSubmitter implements AutoCloseable {
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.s2cOptions = s2cOptions;
     this.contextProvider = contextProvider;
-
+    
     submitLatency = Timer.builder("state.request.submit.latency")
         .description("The end to end latency of a submitted request handled by the leader")
         .register(meterRegistry);
@@ -90,6 +90,9 @@ public class StateRequestSubmitter implements AutoCloseable {
           TimeUnit.MILLISECONDS.sleep(backOff);
           continue;
         } else if (response.hasNotLeaderError()) {
+          if (stateRequest.getLeaderCommand()) {
+            return response;
+          }
           log.debug()
               .log("Leader responded with NotLeaderError. Checking leader state then retrying");
           leaderState = leaderStateManager.checkLeaderState(leaderState);
@@ -191,9 +194,9 @@ public class StateRequestSubmitter implements AutoCloseable {
       response = localHandler.apply(s2cMessage.getCorrelationId(), s2cMessage.getStateRequest());
     } else {
       Timer.Sample sample = Timer.start();
-
+      
       response = s2cClient.send(s2cMessage, s2cOptions.requestTimeoutMs());
-
+      
       sample.stop(submitLatency);
       logBuilder.addKeyValue("response", response).log("Response received");
     }

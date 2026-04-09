@@ -6,6 +6,7 @@ Welcome to the S2C's design document. This document aims to provide a comprehens
 
 ---
 
+
 ## Overview
 
 S2C is a state machine replication (SMR) system built on top of AWS S3 with two primary goals.
@@ -55,7 +56,6 @@ A node interested in joining an S2C cluster, must first be able to discover the 
 - The leader's identity (an identifier with the host and port of the leader node).
 - The commit index of the log.
 - The list of followers of the given epoch.
-
 The `LeaderState` is stored in S3 as a single object and is only updated (mutated or not) using S3's CAS semantics (conditional writes). **Whichever node **successfully updates it**, is the leader.** It should ideally be serialized in a human-readable format (e.g. JSON), which should not impose a performance problem, given its small size.
 
 To join the cluster, the node enters a join loop:
@@ -286,6 +286,8 @@ The delay is made to avoid leadership attempts storm (thundering herd) and by gi
 #### 1.5.3 Followership:
 
 Followers are registered, along with their last applied index, in `LeaderState`. This is helpful for leadership attempt while determining the priority of the node to become the leader. The followers list belongs to the current leadership. Because of that a new leader starts with empty followers list (the last followers list is overwritten with an empty list after a new leadership), where new followers must send follow requests to the new leader explicitly (over a custom RPC) to be added to the followers list.
+
+Note that the list of followers and their apply indices in leader state is eventually consistent as updating it doesn't go through the consensus path, which is not necessary because followers don't participate in consensus at all.
 
 #### 1.5.4 The Role of Epochs
 The `epoch` in `LeaderState` ensures that leadership transitions are monotonic. 

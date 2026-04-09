@@ -35,7 +35,7 @@ import io.s2c.configs.S2COptions;
 import io.s2c.error.ApplicationResultUnavailableException;
 import io.s2c.error.RequestOutOfSequenceException;
 import io.s2c.error.S2CStoppedException;
-import io.s2c.error.StateRequestException;
+import io.s2c.error.StateRequestHandlingException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.StateRequest;
 import io.s2c.model.messages.StateRequest.StateRequestType;
@@ -172,7 +172,7 @@ class StateRequestHandlingTest {
     try {
       stateRequestHandler.handle(UUID.randomUUID().toString(), outsideSlidingWindowRequest);
     }
-    catch (StateRequestException | InterruptedException | RequestOutOfSequenceException e) {
+    catch (StateRequestHandlingException | InterruptedException | RequestOutOfSequenceException e) {
       if (e instanceof RequestOutOfSequenceException re) {
         shouldNextSeqNum = re.nextSeqNum();
       }

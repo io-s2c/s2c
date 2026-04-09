@@ -41,9 +41,11 @@ import io.s2c.TestUtil;
 import io.s2c.configs.S2COptions;
 import io.s2c.configs.S2CRetryOptions;
 import io.s2c.error.ApplicationException;
+import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.model.messages.S2CMessage;
 import io.s2c.model.state.NodeIdentity;
+import io.s2c.model.state.S2CGroupStatus;
 import io.s2c.model.state.StateSnapshot;
 import io.s2c.network.S2CServer;
 import io.s2c.network.message.reader.Failure;
@@ -261,7 +263,7 @@ class ConsensusTest {
 
   @Test
   void testLogOrderingWithConcurrentCommandsTwoNodesTwoSMs()
-      throws IOException, InterruptedException, S2CStoppedException, ApplicationException {
+      throws ApplicationException, S2CNodeStoppedException {
 
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
 
@@ -316,12 +318,15 @@ class ConsensusTest {
       }
 
     }
-
-    String node1valueAppender = appenderStateMachine1.value();
-    int node1valueCounter = counterStateMachine1.get();
-
-    assertEquals("0123456789", node1valueAppender);
-    assertEquals(10, node1valueCounter);
+    try {
+      String node1valueAppender = appenderStateMachine1.value();
+      int node1valueCounter = counterStateMachine1.get();
+      assertEquals("0123456789", node1valueAppender);
+      assertEquals(10, node1valueCounter);
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
 
   }
 
@@ -454,15 +459,18 @@ class ConsensusTest {
         try {
           counterStateMachine1.increment();
         }
-        catch (ApplicationException e) {
-          cause.set(e.getCause());
+        catch (ApplicationException | S2CNodeStoppedException e) {
+          cause.set(e);
+        }
+        catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
         }
       });
 
     }
 
     assertNotNull(cause.get());
-    assertTrue(cause.get() instanceof S2CStoppedException);
+    assertTrue(cause.get() instanceof S2CNodeStoppedException);
   }
 
   @Test
@@ -503,8 +511,11 @@ class ConsensusTest {
           counterStateMachine2.increment();
 
         }
-        catch (ApplicationException e) {
-          cause.set(e.getCause());
+        catch (ApplicationException | S2CNodeStoppedException e) {
+          cause.set(e);
+        }
+        catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
         }
       });
 
@@ -554,8 +565,11 @@ class ConsensusTest {
           try {
             counterStateMachine2.increment();
           }
-          catch (ApplicationException e) {
-            cause.set(e.getCause());
+          catch (ApplicationException | S2CNodeStoppedException e) {
+            cause.set(e);
+          }
+          catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
           }
           i++;
           if (i == 2) {
@@ -642,7 +656,8 @@ class ConsensusTest {
                 node2BecameLeaderLatch.countDown();
               }
             }
-            catch (ApplicationException | InterruptedException | S2CStoppedException e) {
+            catch (ApplicationException | S2CNodeStoppedException | S2CStoppedException
+                | InterruptedException e) {
               cause.set(e);
             }
 
@@ -686,7 +701,7 @@ class ConsensusTest {
         catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
-        catch (ApplicationException e) {
+        catch (ApplicationException | S2CNodeStoppedException e) {
           cause.set(e);
 
         }
@@ -713,7 +728,7 @@ class ConsensusTest {
     }));
 
     assertTrue(node1IsLeader.get());
-    
+
     initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
         Set.of(Failure.DROP), m -> {
         }), StateMachine.COUNTER);
@@ -765,7 +780,7 @@ class ConsensusTest {
     }
 
     shutdownNode2();
-    
+
     initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
         Set.of(Failure.DROP), m -> {
         }), StateMachine.COUNTER);
@@ -797,8 +812,8 @@ class ConsensusTest {
   }
 
   @Test
-  void testSnapshotting()
-      throws IOException, InterruptedException, S2CStoppedException, ApplicationException {
+  void testSnapshotting() throws IOException, InterruptedException, S2CStoppedException,
+      ApplicationException, S2CNodeStoppedException {
 
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
@@ -863,8 +878,8 @@ class ConsensusTest {
   }
 
   @Test
-  void testFaultInjectedSyncrhonizationKeepsOrdering()
-      throws IOException, InterruptedException, S2CStoppedException, ApplicationException {
+  void testFaultInjectedSyncrhonizationKeepsOrdering() throws IOException, InterruptedException,
+      S2CStoppedException, ApplicationException, S2CNodeStoppedException {
 
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.APPENDER);
@@ -893,13 +908,15 @@ class ConsensusTest {
 
     AtomicReference<String> node2Value = new AtomicReference<>(
         snapshot.get().toString(StandardCharsets.UTF_8));
+    assertDoesNotThrow(() -> {
 
-    TestUtil.sleepUntil(300, 500, () -> {
+      TestUtil.sleepUntil(300, 500, () -> {
 
-      snapshot.set(appenderStateMachine2.snapshot());
-      node2Value.set(snapshot.get().toString(StandardCharsets.UTF_8));
+        snapshot.set(appenderStateMachine2.snapshot());
+        node2Value.set(snapshot.get().toString(StandardCharsets.UTF_8));
 
-      return node2Value.get().equals(node1value);
+        return node2Value.get().equals(node1value);
+      });
     });
 
     assertEquals(node1value, node2Value.get());
@@ -914,7 +931,7 @@ class ConsensusTest {
 
   @Test
   void testSynchronizationOfTooFarBehindFollower()
-      throws IOException, InterruptedException, ApplicationException {
+      throws IOException, InterruptedException, ApplicationException, S2CNodeStoppedException {
 
     // Disable caching so that no truncated entry can be found in cache
     int logLruCacheSize = s2cOptions.logLruCacheSize();
@@ -994,4 +1011,40 @@ class ConsensusTest {
 
   }
 
+  @Test
+  void testGroupStatusCorrectness()
+      throws IOException, InterruptedException, S2CStoppedException, S2CNodeStoppedException {
+
+    initAndStartNode1(() -> S2CMessageReader.create(s2cOptions.maxMessageSize()),
+        StateMachine.COUNTER);
+
+    initAndStartNode2(() -> S2CMessageReader.create(s2cOptions.maxMessageSize()),
+        StateMachine.COUNTER);
+
+    assertTrue(s2cNode1.isLeader());
+    assertFalse(s2cNode2.isLeader());
+
+    for (int i = 0; i < 10; i++) {
+      assertDoesNotThrow(() -> counterStateMachine2.increment());
+    }
+
+    // Wait till follower is fully synchronized
+    assertDoesNotThrow(() -> TestUtil.sleepUntil(10, 300, () -> s2cNode2.applyIndex() == 10));
+
+    S2CGroupStatus groupStatus1 = counterStateMachine1.getS2SGroupStatus();
+    S2CGroupStatus groupStatus2 = counterStateMachine2.getS2SGroupStatus();
+
+    assertEquals(groupStatus1, groupStatus2);
+    assertEquals(10, groupStatus1.getCommitIndex());
+    assertEquals(10, groupStatus1.getLeadersApplyIndex());
+    assertEquals(nodeIdentity1, groupStatus1.getLeaderNodeIdentity());
+    assertEquals(1, groupStatus1.getEpoch());
+    assertEquals(1, groupStatus1.getFollowersCount());
+    assertTrue(groupStatus1.getFollowersList()
+        .stream()
+        .map(f -> f.getNodeIdentity())
+        .toList()
+        .contains(nodeIdentity2));
+
+  }
 }

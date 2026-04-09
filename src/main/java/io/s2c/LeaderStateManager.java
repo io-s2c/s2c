@@ -61,6 +61,7 @@ public class LeaderStateManager implements AutoCloseable {
   private final ReentrantReadWriteLock currentLeaderStateLock = new ReentrantReadWriteLock();
   private final AtomicBoolean firstCommitAsLeader = new AtomicBoolean(false);
   private final Map<NodeIdentity, FollowerInfo> followers = new ConcurrentHashMap<>();
+
   private final List<Awaiter<LeaderState, S2CStoppedException>> awaiters = Collections
       .synchronizedList(new ArrayList<>());
   private final KeysResolver keysResolver;
@@ -111,10 +112,12 @@ public class LeaderStateManager implements AutoCloseable {
     // First epoch is 1
     long oldEpoch = oldLeaderState == null ? 0 : oldLeaderState.getEpoch();
     verifyNotStopped();
-    Timer.Sample sample = Timer.start();
+    Timer.Sample sample = null;
 
-    currentLeaderStateLock.writeLock().lockInterruptibly();
+    currentLeaderStateLock.writeLock()
+        .lockInterruptibly();
     try {
+      sample = Timer.start();
       if (oldLeaderState != currentLeaderState) {
         return currentLeaderState();
       }
@@ -131,8 +134,11 @@ public class LeaderStateManager implements AutoCloseable {
       return currentLeaderState();
     }
     finally {
-      sample.stop(checkLatency);
-      currentLeaderStateLock.writeLock().unlock();
+      if (sample != null) {
+        sample.stop(checkLatency);
+      }
+      currentLeaderStateLock.writeLock()
+          .unlock();
     }
   }
 
@@ -142,11 +148,26 @@ public class LeaderStateManager implements AutoCloseable {
         s.accept(leaderState);
       }
       catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        log.debug().setCause(e).log("Interrupted");
+        Thread.currentThread()
+            .interrupt();
+        log.debug()
+            .setCause(e)
+            .log("Interrupted");
         closeQuietly();
       }
     });
+  }
+
+  public void updateFollowerApplyIndex(NodeIdentity followerNodeIdentity, long newApplyIndex) {
+    followers.computeIfPresent(followerNodeIdentity, (ni, followerInfo) -> {
+      return FollowerInfo.newBuilder(followerInfo)
+          .setSynchronizedApplyIndex(newApplyIndex)
+          .build();
+    });
+  }
+
+  public void discardFollower(NodeIdentity nodeIdentity) {
+    followers.remove(nodeIdentity);
   }
 
   public void closeQuietly() {
@@ -154,29 +175,36 @@ public class LeaderStateManager implements AutoCloseable {
       close();
     }
     catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Interrupted while closing");
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted while closing");
     }
   }
 
   @Override
   public void close() throws InterruptedException {
-    currentLeaderStateLock.writeLock().lockInterruptibly();
+    currentLeaderStateLock.writeLock()
+        .lockInterruptibly();
     stopped = true;
-
     try {
       awaiters.forEach(a -> {
         try {
           a.stop();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          log.debug().setCause(e).log("Interrupted");
+          Thread.currentThread()
+              .interrupt();
+          log.debug()
+              .setCause(e)
+              .log("Interrupted");
         }
       });
     }
     finally {
-      currentLeaderStateLock.writeLock().unlock();
+      currentLeaderStateLock.writeLock()
+          .unlock();
     }
   }
 
@@ -190,14 +218,16 @@ public class LeaderStateManager implements AutoCloseable {
 
   public void handleConcurrentStateModificationException(ConcurrentStateModificationException e)
       throws InterruptedException, S2CStoppedException {
-    currentLeaderStateLock.writeLock().lockInterruptibly();
+    currentLeaderStateLock.writeLock()
+        .lockInterruptibly();
     try {
       currentLeaderState(catchUpLeaderState());
       if (currentLeaderState() == null) {
         throw new IllegalStateException("Leader ClientState cannot be unknown at this node state",
             e);
       }
-      if (currentLeaderState().getEpoch() <= e.leaderState().getEpoch()) {
+      if (currentLeaderState().getEpoch() <= e.leaderState()
+          .getEpoch()) {
         throw new IllegalStateException(
             "Command log or current leader state was modified, but leader epoch was not incremented.",
             e);
@@ -206,13 +236,15 @@ public class LeaderStateManager implements AutoCloseable {
       notifyLeaderChange(currentLeaderState);
     }
     finally {
-      currentLeaderStateLock.writeLock().unlock();
+      currentLeaderStateLock.writeLock()
+          .unlock();
     }
 
   }
 
   public boolean isFollower(NodeIdentity nodeIdentity) {
-    return followers.keySet().contains(nodeIdentity);
+    return followers.keySet()
+        .contains(nodeIdentity);
   }
 
   // Leader-only method
@@ -220,7 +252,8 @@ public class LeaderStateManager implements AutoCloseable {
       throws ConcurrentStateModificationException, InterruptedException {
 
     Timer.Sample sample = Timer.start();
-    currentLeaderStateLock.writeLock().lockInterruptibly();
+    currentLeaderStateLock.writeLock()
+        .lockInterruptibly();
     try {
       if (leaderETag == null) {
         throw new IllegalStateException(
@@ -238,8 +271,8 @@ public class LeaderStateManager implements AutoCloseable {
       String leaderStateJsonStr = leaderStateToJson(leaderState);
       ByteString leaderStateByteBuffer = ByteString
           .copyFrom(leaderStateJsonStr.getBytes(StandardCharsets.UTF_8));
-      var newLeaderEtagOptional = objectWriter.writeIfMatch(keysResolver.leaderKey(),
-          leaderStateByteBuffer, leaderETag);
+      var newLeaderEtagOptional = objectWriter
+          .writeIfMatch(keysResolver.leaderKey(), leaderStateByteBuffer, leaderETag);
 
       if (newLeaderEtagOptional.isEmpty()) {
         throw new ConcurrentStateModificationException(leaderState);
@@ -249,7 +282,8 @@ public class LeaderStateManager implements AutoCloseable {
       }
     }
     finally {
-      currentLeaderStateLock.writeLock().unlock();
+      currentLeaderStateLock.writeLock()
+          .unlock();
       sample.stop(updateLatency);
     }
   }
@@ -269,7 +303,9 @@ public class LeaderStateManager implements AutoCloseable {
           .setCommitIndex(commitIndex)
           .setEpoch(epoch)
           .build();
-      log.debug().addKeyValue("leaderState", leaderState).log("No current leader.");
+      log.debug()
+          .addKeyValue("leaderState", leaderState)
+          .log("No current leader.");
     } else {
 
       log.debug()
@@ -284,17 +320,18 @@ public class LeaderStateManager implements AutoCloseable {
 
         // We add the node as a follower if it has just joined
         followersCopy.add(FollowerInfo.newBuilder()
-            .setApplyIndex(applyIndexSupplier.get())
+            .setSynchronizedApplyIndex(applyIndexSupplier.get())
             .setNodeIdentity(nodeIdentity)
             .build());
 
         List<FollowerInfo> sortedFollowers = followersCopy.stream()
-            .sorted(Comparator.comparingLong(f -> f.getApplyIndex()))
+            .sorted(Comparator.comparingLong(f -> f.getSynchronizedApplyIndex()))
             .toList();
 
         int rank = verifyNoHigherRankAlive(sortedFollowers);
 
-        log.debug().log("No healthy higher ranked followers found.");
+        log.debug()
+            .log("No healthy higher ranked followers found.");
 
         // The higher the rank, the less the delay
         long delay = leadershipDelay(followersCopy.size() - rank);
@@ -314,9 +351,12 @@ public class LeaderStateManager implements AutoCloseable {
 
       } else {
 
-        log.debug().log("Node is leader, no rank-based delay will be made");
+        log.debug()
+            .log("Node is leader, no rank-based delay will be made");
 
-        leaderState = LeaderState.newBuilder(current).setEpoch(current.getEpoch() + 1).build();
+        leaderState = LeaderState.newBuilder(current)
+            .setEpoch(current.getEpoch() + 1)
+            .build();
 
       }
     }
@@ -350,7 +390,8 @@ public class LeaderStateManager implements AutoCloseable {
 
     Optional<String> newLeaderETag = Optional.empty();
     try {
-      String leaderStateJsonStr = JsonFormat.printer().print(newLeaderState);
+      String leaderStateJsonStr = JsonFormat.printer()
+          .print(newLeaderState);
       ByteString leaderStateByteBuffer = ByteString
           .copyFrom(leaderStateJsonStr.getBytes(StandardCharsets.UTF_8));
       if (currentLeaderState != null) {
@@ -363,10 +404,12 @@ public class LeaderStateManager implements AutoCloseable {
       }
       if (newLeaderETag.isPresent()) {
         leaderETag = newLeaderETag.get();
-        log.debug().log("Leadership attempt ended successfully.");
+        log.debug()
+            .log("Leadership attempt ended successfully.");
         return newLeaderState;
       } else {
-        log.debug().log("Leadership attempt failed");
+        log.debug()
+            .log("Leadership attempt failed");
       }
     }
     catch (InvalidProtocolBufferException e) {
@@ -379,15 +422,23 @@ public class LeaderStateManager implements AutoCloseable {
   private LeaderState doCatchUpLeaderState() throws InterruptedException, ObjectCorruptedException {
     String leaderKey = keysResolver.leaderKey();
 
-    log.trace().addKeyValue("key", leaderKey).log("Catching up leader state...");
+    log.trace()
+        .addKeyValue("key", leaderKey)
+        .log("Catching up leader state...");
     var result = objectReader.<LeaderState>readJson(leaderKey, LeaderState.newBuilder());
     if (result.isPresent()) {
       // We only re-assign if etag was changed
-      if (!result.get().eTag().equals(leaderETag)) {
-        leaderETag = result.get().eTag();
+      if (!result.get()
+          .eTag()
+          .equals(leaderETag)) {
+        leaderETag = result.get()
+            .eTag();
       }
-      log.debug().addKeyValue("key", leaderKey).log("Leader state caught up successfully.");
-      return result.get().object();
+      log.debug()
+          .addKeyValue("key", leaderKey)
+          .log("Leader state caught up successfully.");
+      return result.get()
+          .object();
     }
     return null;
 
@@ -458,10 +509,13 @@ public class LeaderStateManager implements AutoCloseable {
         }
         catch (ConnectTimeoutException | ClientNotConnectedException | UnknownHostException
             | IOException e) {
-          log.debug().setCause(e).log("Error while connecting");
+          log.debug()
+              .setCause(e)
+              .log("Error while connecting");
         }
         if (backoffCounter.canAttempt()) {
-          backoffCounter.enrich(log.debug()).log("Retrying");
+          backoffCounter.enrich(log.debug())
+              .log("Retrying");
           backoffCounter.awaitNextAttempt();
         }
       }
@@ -475,7 +529,9 @@ public class LeaderStateManager implements AutoCloseable {
 
   private String leaderStateToJson(LeaderState leaderState) {
     try {
-      return JsonFormat.printer().alwaysPrintFieldsWithNoPresence().print(leaderState);
+      return JsonFormat.printer()
+          .alwaysPrintFieldsWithNoPresence()
+          .print(leaderState);
     }
     catch (InvalidProtocolBufferException e) {
       throw new IllegalArgumentException("Updating leader state failed", e); // Should never happen
@@ -486,10 +542,11 @@ public class LeaderStateManager implements AutoCloseable {
       throws InterruptedException, LowRankNodeException {
     int currentRank = 0;
     for (FollowerInfo follower : sortedFollowers) {
-      if (follower.getNodeIdentity().equals(this.nodeIdentity())) {
+      if (follower.getNodeIdentity()
+          .equals(this.nodeIdentity())) {
         continue;
       }
-      if (follower.getApplyIndex() < applyIndexSupplier.get()) {
+      if (follower.getSynchronizedApplyIndex() < applyIndexSupplier.get()) {
         // The node we check has smaller applyIndex, so we have higher-rank
         currentRank++;
         // We don't need liveness-check, as we are highr-ranked
@@ -533,18 +590,32 @@ public class LeaderStateManager implements AutoCloseable {
   }
 
   public boolean isLeader(LeaderState leaderState) {
-    return leaderState != null && leaderState.getNodeIdentity().equals(nodeIdentity());
+    return leaderState != null && leaderState.getNodeIdentity()
+        .equals(nodeIdentity());
   }
 
   public void resetLeaderState() throws InterruptedException, S2CStoppedException {
-    currentLeaderStateLock.writeLock().lockInterruptibly();
+    currentLeaderStateLock.writeLock()
+        .lockInterruptibly();
     try {
       currentLeaderState = null;
       leaderETag = null;
       getLeaderState();
     }
     finally {
-      currentLeaderStateLock.writeLock().unlock();
+      currentLeaderStateLock.writeLock()
+          .unlock();
     }
+  }
+
+  // Note that this is different from currentLeaderState.getFollowersList() in that leader state
+  // only contains durable data and it's followers list is eventually consistent (followers state is
+  // not part of the consensus path), which is only updated by the next state machine op (command or
+  // read), while this contains the live realtime synchronization state, updated by
+  // FollowerSynchronizers.
+  public List<FollowerInfo> getFollowers() {
+    return followers.values()
+        .stream()
+        .toList();
   }
 }

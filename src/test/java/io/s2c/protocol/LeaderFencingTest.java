@@ -236,7 +236,7 @@ class LeaderFencingTest {
     // We need to wait if we attempt leadership as nodeIdentity2, 100 > 70 == true
     applyIndex2.set(70);
     FollowerInfo followerInfo = FollowerInfo.newBuilder()
-        .setApplyIndex(100)
+        .setSynchronizedApplyIndex(100)
         .setNodeIdentity(followerNodeIdentity)
         .build();
 

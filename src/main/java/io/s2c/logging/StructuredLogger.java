@@ -18,7 +18,9 @@ public class StructuredLogger {
   }
 
   public UncaughtExceptionHandler uncaughtExceptionLogger() {
-    return (Thread thread, Throwable e) -> e.printStackTrace();
+    return (Thread thread, Throwable e) -> error().setCause(e)
+        .addKeyValue("thread", thread.getName())
+        .log("Uncaught exception.");
   }
 
   public LoggingEventBuilder info() {

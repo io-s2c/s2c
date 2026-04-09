@@ -38,6 +38,7 @@ message LogEntry {
   bytes body = 1;
   string source_sm = 2;
   RequestId request_id = 3;
+  bool internal = 4;
 }
 
 message RequestId {
@@ -52,13 +53,28 @@ message LogEntriesBatch {
 
 message FollowerInfo {
   NodeIdentity node_identity = 1;
-  uint64 apply_index = 2;
+  // This is the index the follower is lastly synchronized to by the leader.
+  // Given followers apply batches asynchronously, this does not necessarily reflect 
+  // the applyIndex of the follower's RSM.
+  uint64 synchronized_apply_index = 2;
   uint64 sequence_number = 3;
 }
 
+// This is the contents of leader.json at a given point in time
 message LeaderState {
   uint64 epoch = 1;
   uint64 commit_index = 2;
   NodeIdentity node_identity = 3;
   repeated FollowerInfo followers = 4;
+}
+
+// This differs from LeaderState in that it is the response of a query to the current actual leader's runtime state,
+// while LeaderState is the persisted view in object storage.
+message S2CGroupStatus {
+  NodeIdentity leader_node_identity = 1;
+  uint64 epoch = 2;
+  uint64 commit_index = 3;
+  uint64 leaders_apply_index = 4;
+  // Alive members that are not the leader.
+  repeated FollowerInfo followers = 5;
 }

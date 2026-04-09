@@ -1,15 +1,12 @@
 package io.s2c.teststatemachines;
 
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import com.google.protobuf.ByteString;
 
 import io.s2c.S2CStateMachine;
 import io.s2c.error.ApplicationException;
+import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.model.messages.StateRequest.StateRequestType;
 import io.s2c.model.messages.StateRequestResponse;
 
@@ -43,12 +40,12 @@ public class StringAppender extends S2CStateMachine {
 
   }
 
-  public void append(String str) throws ApplicationException {
+  public void append(String str) throws ApplicationException, S2CNodeStoppedException, InterruptedException {
     var byteStr = ByteString.copyFrom(str.getBytes(StandardCharsets.UTF_8));
     sendToLeader(byteStr, StateRequestType.COMMAND);
   }
 
-  public String value() throws ApplicationException {
+  public String value() throws ApplicationException, S2CNodeStoppedException, InterruptedException {
     ByteString byteStr = ByteString.copyFrom("GET".getBytes(StandardCharsets.UTF_8));
     StateRequestResponse response = sendToLeader(byteStr, StateRequestType.READ);
     String result = null;

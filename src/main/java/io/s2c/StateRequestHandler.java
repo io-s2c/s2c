@@ -32,7 +32,7 @@ import io.s2c.error.ConcurrentStateModificationException;
 import io.s2c.error.NotLeaderException;
 import io.s2c.error.RequestOutOfSequenceException;
 import io.s2c.error.S2CStoppedException;
-import io.s2c.error.StateRequestException;
+import io.s2c.error.StateRequestHandlingException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.StateRequest;
 import io.s2c.model.messages.StateRequest.StateRequestType;
@@ -48,7 +48,7 @@ import io.s2c.util.LRUCache;
 public class StateRequestHandler implements Task {
 
   public static record TraceableStateRequest(String correlationId,
-      RequestResponseTask<StateRequest, ByteString, StateRequestException> reqRes) {
+      RequestResponseTask<StateRequest, ByteString, StateRequestHandlingException> reqRes) {
   }
 
   @FunctionalInterface
@@ -121,7 +121,7 @@ public class StateRequestHandler implements Task {
   }
 
   public ByteString handle(String correlationId, StateRequest stateRequest)
-      throws StateRequestException, InterruptedException, RequestOutOfSequenceException {
+      throws StateRequestHandlingException, InterruptedException, RequestOutOfSequenceException {
 
     TraceableStateRequest req = new TraceableStateRequest(correlationId,
         new RequestResponseTask<>(stateRequest));
@@ -336,6 +336,7 @@ public class StateRequestHandler implements Task {
 
   private void handleReads(List<TraceableStateRequest> reads)
       throws InterruptedException, S2CStoppedException {
+    
     List<TraceableStateRequest> copyReads = reads.stream()
         .map(r -> new TraceableStateRequest(r.correlationId(),
             new RequestResponseTask<>(r.reqRes().request())))

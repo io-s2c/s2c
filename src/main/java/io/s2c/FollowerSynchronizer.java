@@ -242,6 +242,8 @@ public class FollowerSynchronizer implements AutoCloseable, Task {
         long before = followerApplyIndex;
         res = send(req);
         followerApplyIndex = res.getSynchronizeResponse().getApplyIndex();
+        leaderStateManager.updateFollowerApplyIndex(followerInfo.getNodeIdentity(),
+            followerApplyIndex);
         if (followerApplyIndex == before) { // Follower's queue is full
           followerBusy = true;
           break;
@@ -312,6 +314,7 @@ public class FollowerSynchronizer implements AutoCloseable, Task {
   public void close() throws InterruptedException {
     started = false;
     s2cClient.close();
+    leaderStateManager.discardFollower(followerInfo.getNodeIdentity());
     freeUp.accept(followerInfo);
     requests.put(POISON_PILL);
   }

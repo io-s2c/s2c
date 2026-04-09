@@ -2,6 +2,7 @@ package io.s2c;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 import org.testcontainers.localstack.LocalStackContainer;
@@ -79,7 +80,7 @@ public class TestUtil {
   }
 
   public static <T> void sleepUntil(int maxTotalWaitSec, int stepMs, Supplier<Boolean> until)
-      throws InterruptedException {
+      throws InterruptedException, TimeoutException {
 
     long maxTotalWait = TimeUnit.SECONDS.toNanos(maxTotalWaitSec);
 
@@ -94,6 +95,10 @@ public class TestUtil {
 
       elapsedTime += TimeUnit.MILLISECONDS.toNanos(stepMs);
 
+    }
+    
+    if (!until.get()) {
+      throw new TimeoutException();
     }
   }
 }

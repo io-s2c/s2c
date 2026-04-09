@@ -10,17 +10,25 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.protobuf.ByteString;
+
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
+import io.s2c.concurrency.Awaiter;
 import io.s2c.concurrency.GuardedValue;
+import io.s2c.concurrency.Task;
 import io.s2c.concurrency.TaskExecutor;
 import io.s2c.configs.S2COptions;
 import io.s2c.error.S2CInterruptedException;
+import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
+import io.s2c.model.messages.InternalStateRequest;
 import io.s2c.model.messages.S2CMessage;
 import io.s2c.model.messages.StateRequest;
+import io.s2c.model.state.S2CGroupStatus;
+import io.s2c.model.state.LeaderState;
 import io.s2c.model.state.NodeIdentity;
 import io.s2c.network.ClientRole;
 import io.s2c.network.S2CClient;
@@ -126,7 +134,7 @@ public class S2CNode implements AutoCloseable {
       this.s2cMessageReaderFactory = s2cMessageReaderFactory;
       return this;
     }
-    
+
     public Builder meterRegistry(MeterRegistry meterRegistry) {
       this.meterRegistry = meterRegistry;
       return this;
@@ -150,13 +158,20 @@ public class S2CNode implements AutoCloseable {
       if (s2cGroupRegistry == null) {
         s2cGroupRegistry = new S2CGroupRegistry();
       }
-      
+
       if (meterRegistry == null) {
         meterRegistry = Metrics.globalRegistry;
       }
 
-      return new S2CNode(s3Facade, s2cServer, bucket, nodeIdentity, s2cGroupId, s2cOptions,
-          s2cMessageReaderFactory, s2cGroupRegistry, meterRegistry);
+      return new S2CNode(s3Facade,
+          s2cServer,
+          bucket,
+          nodeIdentity,
+          s2cGroupId,
+          s2cOptions,
+          s2cMessageReaderFactory,
+          s2cGroupRegistry,
+          meterRegistry);
 
     }
 
@@ -169,7 +184,8 @@ public class S2CNode implements AutoCloseable {
       String s2cGroupId,
       S2COptions s2cOptions,
       Supplier<S2CMessageReader> s2cMessageReaderFactory,
-      S2CGroupRegistry s2cGroupRegistry, MeterRegistry meterRegistry) {
+      S2CGroupRegistry s2cGroupRegistry,
+      MeterRegistry meterRegistry) {
 
     this.s2cGroupId = s2cGroupId;
     this.nodeIdentity = nodeIdentity;
@@ -183,83 +199,144 @@ public class S2CNode implements AutoCloseable {
     guardedNodesDedups = new GuardedValue<>(
         new LRUCache<>(s2cOptions.maxDeduplicatedClients(), k -> null));
 
-    this.contextProvider = new ContextProvider(s2cGroupId, nodeIdentity, s2cOptions.logNodeIdentity());
-    s2cStateMachineRegistry = new S2CStateMachineRegistry(this, this::submitStateRequest,
+    this.contextProvider = new ContextProvider(s2cGroupId,
+        nodeIdentity,
+        s2cOptions.logNodeIdentity());
+    s2cStateMachineRegistry = new S2CStateMachineRegistry(this,
+        this::submitStateRequest,
         this::nextSequenceNumber);
 
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
 
     taskExecutor = new TaskExecutor(contextProvider.ownerName(S2CNode.class),
-        log.uncaughtExceptionLogger(), meterRegistry);
+        log.uncaughtExceptionLogger(),
+        meterRegistry);
 
     Function<ClientRole, Supplier<S2CClient>> s2cClientCurriedFactory = newS2CClientCurriedFactory(
         s2cOptions);
 
     Function<StructuredLogger, ObjectReader> objectReaderFactory = l -> new ObjectReader(s3Facade,
-        bucket, l, s2cOptions.s2cRetryOptions());
+        bucket,
+        l,
+        s2cOptions.s2cRetryOptions());
 
     Function<StructuredLogger, ObjectWriter> objectWriterFactory = l -> new ObjectWriter(s3Facade,
-        bucket, l, s2cOptions.s2cRetryOptions());
+        bucket,
+        l,
+        s2cOptions.s2cRetryOptions());
 
-    this.s2cLog = new S2CLog(objectReaderFactory, objectWriterFactory, contextProvider, s2cOptions,
+    this.s2cLog = new S2CLog(objectReaderFactory,
+        objectWriterFactory,
+        contextProvider,
+        s2cOptions,
         meterRegistry);
 
-    this.s2cGroupServer = new S2CGroupServer(this::newClientMessageAcceptor, s2cGroupId,
-        this::handleFatalServerException, s2cMessageReaderFactory, contextProvider, meterRegistry);
+    this.s2cGroupServer = new S2CGroupServer(this::newClientMessageAcceptor,
+        s2cGroupId,
+        this::handleFatalServerException,
+        s2cMessageReaderFactory,
+        contextProvider,
+        meterRegistry);
 
     s2cServer.registerS2CGroupServer(s2cGroupServer);
 
     SnapshotStorageManager snapshotStorageManager = new SnapshotStorageManager(objectReaderFactory,
-        objectWriterFactory, contextProvider, meterRegistry);
+        objectWriterFactory,
+        contextProvider,
+        meterRegistry);
 
-    this.rsm = new RSM(contextProvider, s2cStateMachineRegistry, s2cLog::replay,
-        snapshotStorageManager::download, guardedNodesDedups);
+    this.rsm = new RSM(contextProvider,
+        s2cStateMachineRegistry,
+        s2cLog::replay,
+        snapshotStorageManager::download,
+        guardedNodesDedups,
+        this::handleInternalStateRequest);
 
-    this.leaderStateManager = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
-        s2cOptions, contextProvider, s2cClientCurriedFactory.apply(ClientRole.IS_ALIVE_CHECKER),
-        rsm::applyIndex, meterRegistry);
+    this.leaderStateManager = new LeaderStateManager(objectReaderFactory,
+        objectWriterFactory,
+        s2cOptions,
+        contextProvider,
+        s2cClientCurriedFactory.apply(ClientRole.IS_ALIVE_CHECKER),
+        rsm::applyIndex,
+        meterRegistry);
 
-    this.synchronizeManager = new SynchronizeManager(s2cLog, s2cOptions, contextProvider,
-        s2cClientCurriedFactory.apply(ClientRole.SYNCHRONIZER), leaderStateManager, meterRegistry);
+    this.synchronizeManager = new SynchronizeManager(s2cLog,
+        s2cOptions,
+        contextProvider,
+        s2cClientCurriedFactory.apply(ClientRole.SYNCHRONIZER),
+        leaderStateManager,
+        meterRegistry);
 
     this.stateRequestHandler = new StateRequestHandler(contextProvider,
-        s2cOptions.flushIntervalMs(), s2cOptions.batchMinCount(), leaderStateManager,
-        synchronizeManager::syncCommit, rsm::applyBatch, s2cLog,
-        leaderStateManager::handleConcurrentStateModificationException, guardedNodesDedups,
-        s2cOptions.s2cExactlyOnceOptions(), meterRegistry);
+        s2cOptions.flushIntervalMs(),
+        s2cOptions.batchMinCount(),
+        leaderStateManager,
+        synchronizeManager::syncCommit,
+        rsm::applyBatch,
+        s2cLog,
+        leaderStateManager::handleConcurrentStateModificationException,
+        guardedNodesDedups,
+        s2cOptions.s2cExactlyOnceOptions(),
+        meterRegistry);
 
-    this.snapshottingWorker = new SnapshottingWorker(leaderStateManager, contextProvider,
-        snapshotStorageManager, rsm, leaderStateManager::handleConcurrentStateModificationException,
-        this::cleanSnapshottedEntries, s2cOptions, meterRegistry);
+    this.snapshottingWorker = new SnapshottingWorker(leaderStateManager,
+        contextProvider,
+        snapshotStorageManager,
+        rsm,
+        leaderStateManager::handleConcurrentStateModificationException,
+        this::cleanSnapshottedEntries,
+        s2cOptions,
+        meterRegistry);
 
     this.leaderHealthMonitor = new LeaderHealthMonitor(leaderStateManager,
-        s2cOptions.maxMissedHeartbeats(), s2cOptions.leaderHeartbeatTimeoutMs(), contextProvider);
+        s2cOptions.maxMissedHeartbeats(),
+        s2cOptions.leaderHeartbeatTimeoutMs(),
+        contextProvider);
 
-    s2cClient = s2cClientCurriedFactory.apply(ClientRole.FOLLOWER).get();
+    s2cClient = s2cClientCurriedFactory.apply(ClientRole.FOLLOWER)
+        .get();
 
-    this.nodeStateManager = new NodeStateManager(leaderStateManager, s2cClient, contextProvider,
-        nodeIdentity, guardedLeaderStarting, rsm, this::cleanSnapshottedEntries, s2cOptions,
+    this.nodeStateManager = new NodeStateManager(leaderStateManager,
+        s2cClient,
+        contextProvider,
+        nodeIdentity,
+        guardedLeaderStarting,
+        rsm,
+        this::cleanSnapshottedEntries,
+        s2cOptions,
         meterRegistry);
     this.asyncBatchApplier = new AsyncBatchApplier(rsm, contextProvider, s2cOptions);
-    this.clientMessageHandler = new ClientMessageHandler(contextProvider, leaderStateManager,
-        leaderHealthMonitor::registerHeartbeat, guardedLeaderStarting, synchronizeManager,
-        stateRequestHandler, asyncBatchApplier, rsm::applyIndex, this::tooFarBehindHanlder,
-        leaderStateManager::handleConcurrentStateModificationException, ni -> {
+    this.clientMessageHandler = new ClientMessageHandler(contextProvider,
+        leaderStateManager,
+        leaderHealthMonitor::registerHeartbeat,
+        guardedLeaderStarting,
+        synchronizeManager,
+        stateRequestHandler,
+        asyncBatchApplier,
+        rsm::applyIndex,
+        this::tooFarBehindHanlder,
+        leaderStateManager::handleConcurrentStateModificationException,
+        ni -> {
           AtomicReference<Optional<Long>> seqNumOptionalReference = new AtomicReference<>();
           guardedNodesDedups.read(dedupUnits -> {
             var dedupUnit = dedupUnits.get(ni);
             if (dedupUnit != null) {
-              seqNumOptionalReference
-                  .set(Optional.of(dedupUnit.lastResult().getLastSeqNum()));
+              seqNumOptionalReference.set(Optional.of(dedupUnit.lastResult()
+                  .getLastSeqNum()));
             } else {
               seqNumOptionalReference.set(Optional.empty());
             }
           });
           return seqNumOptionalReference.get();
-        }, meterRegistry);
+        },
+        meterRegistry);
 
-    this.stateRequestSubmitter = new StateRequestSubmitter(nodeStateManager, leaderStateManager,
-        clientMessageHandler::handleStateRequest, s2cClient, contextProvider, s2cOptions,
+    this.stateRequestSubmitter = new StateRequestSubmitter(nodeStateManager,
+        leaderStateManager,
+        clientMessageHandler::handleStateRequest,
+        s2cClient,
+        contextProvider,
+        s2cOptions,
         meterRegistry);
 
     Gauge.builder("active.s2c.clients.count", s2cClientsCount::get)
@@ -280,19 +357,29 @@ public class S2CNode implements AutoCloseable {
   }
 
   public void start() throws InterruptedException {
-    log.info().log("Starting S2CNode");
+    log.info()
+        .log("Starting S2CNode");
     running = true;
     try {
       leaderStateManager.getLeaderState(); // Trigger leader detection/attempt
       startBackgroundTasks();
-    } catch (S2CStoppedException e) {
-      log.error().setCause(e).log("Error while starting");
+    }
+    catch (S2CStoppedException e) {
+      log.error()
+          .setCause(e)
+          .log("Error while starting");
+      closeQuietly();
     }
   }
 
   public S2CMessage submitStateRequest(StateRequest stateRequest)
-      throws InterruptedException, S2CStoppedException, ClientStoppedException {
-    return stateRequestSubmitter.submit(stateRequest);
+      throws InterruptedException, S2CNodeStoppedException {
+    try {
+      return stateRequestSubmitter.submit(stateRequest);
+    }
+    catch (S2CStoppedException | ClientStoppedException e) {
+      throw new S2CNodeStoppedException(e);
+    }
   }
 
   public <T extends S2CStateMachine> T createAndRegisterStateMachine(String name,
@@ -315,7 +402,8 @@ public class S2CNode implements AutoCloseable {
   @Override
   public void close() throws InterruptedException {
     running = false;
-    log.info().log("Stopping S2CNode");
+    log.info()
+        .log("Stopping S2CNode");
     leaderStateManager.close(); // Propagates S2CStoppedException
     stateRequestHandler.close();
     leaderHealthMonitor.close();
@@ -335,14 +423,17 @@ public class S2CNode implements AutoCloseable {
   }
 
   public long commitIndex() throws InterruptedException, S2CStoppedException {
-    return leaderStateManager.getLeaderState().getCommitIndex();
+    return leaderStateManager.getLeaderState()
+        .getCommitIndex();
   }
 
   private long nextSequenceNumber() {
     try {
       return nodeStateManager.nextSequenceNumber();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread()
+          .interrupt();
       closeQuietly();
       throw new S2CInterruptedException(e);
     }
@@ -354,34 +445,66 @@ public class S2CNode implements AutoCloseable {
     taskExecutor.start("state-requests-handler", stateRequestHandler);
     taskExecutor.start("snapshotting-worker", snapshottingWorker);
     taskExecutor.start("leader-health-monitor", leaderHealthMonitor);
+    taskExecutor.start("role-notifier", Task.of(() -> startRoleTransitionsNotifier()));
+  }
+
+  private void startRoleTransitionsNotifier() {
+    while (running) {
+      Awaiter<LeaderState, S2CStoppedException> roleAwaiter = leaderStateManager.getNewAwaiter();
+      try {
+        LeaderState leaderState = roleAwaiter.await(l -> true);
+        s2cStateMachineRegistry.getAll()
+            .forEach(sm -> sm.consumeRoleTransition(leaderStateManager.isLeader(leaderState)));
+      }
+      catch (InterruptedException | S2CStoppedException e) {
+        if (e instanceof InterruptedException) {
+          Thread.currentThread()
+              .interrupt();
+        }
+        break;
+      }
+    }
   }
 
   private ClientMessageAcceptor newClientMessageAcceptor() {
-    return new ClientMessageAcceptor(clientMessageHandler, contextProvider,
+    return new ClientMessageAcceptor(clientMessageHandler,
+        contextProvider,
         s2cOptions.maxConcurrentStateRequestsHandling(),
-        s2cOptions.s2cNetworkOptions().maxPendingRespsPerClient(), meterRegistry);
+        s2cOptions.s2cNetworkOptions()
+            .maxPendingRespsPerClient(),
+        meterRegistry);
   }
 
   private void handleFatalServerException(S2CGroupServer server, FatalServerException e) {
-    log.debug().setCause(e).log("Fatal server exception. Clearing up resources");
+    log.debug()
+        .setCause(e)
+        .log("Fatal server exception. Clearing up resources");
     closeQuietly();
   }
 
   private void closeQuietly() {
     try {
       close();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Interrupted");
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted");
     }
   }
 
   private void cleanSnapshottedEntries(Long startSnapshotApplyIndex, Long endSnapshotApplyIndex) {
     try {
       s2cLog.truncate(startSnapshotApplyIndex, endSnapshotApplyIndex);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Interrupted");
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted");
     }
   }
 
@@ -405,12 +528,40 @@ public class S2CNode implements AutoCloseable {
     nodeStateManager.notifyTooFarBehind();
     try {
       leaderStateManager.resetLeaderState();
-    } catch (S2CStoppedException | InterruptedException e) {
+    }
+    catch (S2CStoppedException | InterruptedException e) {
       if (e instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
+        Thread.currentThread()
+            .interrupt();
       }
-      log.debug().setCause(e).log("Error while resetting leader state");
+      log.debug()
+          .setCause(e)
+          .log("Error while resetting leader state");
       closeQuietly();
     }
   }
+
+  private ByteString handleInternalStateRequest(InternalStateRequest internalStateRequest)
+      throws InterruptedException, S2CStoppedException {
+    if (internalStateRequest.hasGroupStatusRequest()) {
+      return S2CGroupStatus.newBuilder()
+          .setCommitIndex(leaderStateManager.getLeaderState()
+              .getCommitIndex())
+          .setEpoch(leaderStateManager.getLeaderState()
+              .getEpoch())
+          .addAllFollowers(leaderStateManager.getFollowers())
+          .setLeaderNodeIdentity(nodeIdentity)
+          .setLeadersApplyIndex(rsm.applyIndex())
+          .build()
+          .toByteString();
+    } else {
+      throw new IllegalStateException(
+          "Invalid internal state request: %s ".formatted(internalStateRequest));
+    }
+  }
+
+  public long applyIndex() {
+    return rsm.applyIndex();
+  }
+
 }

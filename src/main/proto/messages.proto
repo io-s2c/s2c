@@ -17,6 +17,7 @@ message S2CMessage {
     StateRequestResponse state_request_response = 3;
     SynchronizeRequest synchronize_request = 4;
     SynchronizeResponse synchronize_response = 5;
+    
     Follow follow = 6;
     FollowResponse follow_response = 7;
     Handshake handshake = 8;
@@ -38,6 +39,12 @@ message Handshake {
   NodeIdentity node_identity = 2;
 }
 
+message InternalStateRequest {
+  oneof body {
+    S2CGroupStatusRequest group_status_request = 1;
+  }
+}
+
 message StateRequest {
   bytes body = 1;
   string source_sm = 2;
@@ -45,6 +52,8 @@ message StateRequest {
   StateRequestType type = 4;
   string group_id = 5;
   uint64 sequence_number = 6;
+  bool internal = 7;
+  bool leader_command = 8;
 
   enum StateRequestType {
     COMMAND = 0;
@@ -59,6 +68,9 @@ message StateRequestResponse {
   oneof error {
     ApplicationResultUnavailableError application_result_unavailable_error = 2;
   }
+}
+
+message S2CGroupStatusRequest {
 }
 
 message ApplicationResult {

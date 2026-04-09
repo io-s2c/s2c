@@ -23,7 +23,7 @@ import io.s2c.error.CommitException;
 import io.s2c.error.ConcurrentStateModificationException;
 import io.s2c.error.RequestOutOfSequenceException;
 import io.s2c.error.S2CStoppedException;
-import io.s2c.error.StateRequestException;
+import io.s2c.error.StateRequestHandlingException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.ApplicationError;
 import io.s2c.model.messages.ApplicationResult;
@@ -64,7 +64,7 @@ public class ClientMessageHandler {
   private final AtomicInteger concurrentStateReqHandling = new AtomicInteger();
   private final AtomicLong lastAcceptedCommitIndexForSynchronize = new AtomicLong();
   private final Function<NodeIdentity, Optional<Long>> clientSequenceNumberProvider;
-  
+
   private Counter succeededStateRequests;
   private Counter failedStateRequests;
   private Counter rejectedStateRequestsNotFollower;
@@ -111,7 +111,8 @@ public class ClientMessageHandler {
   }
 
   public S2CMessage handleFollow(String correlationId, Follow follow) {
-    S2CMessage.Builder builder = S2CMessage.newBuilder().setCorrelationId(correlationId);
+    S2CMessage.Builder builder = S2CMessage.newBuilder()
+        .setCorrelationId(correlationId);
     concurrentFollowHandling.incrementAndGet();
     guardedLeaderStarting.read(leaderStarting -> {
       if (leaderStarting) {
@@ -121,7 +122,7 @@ public class ClientMessageHandler {
       try {
         FollowerInfo followerInfo = FollowerInfo.newBuilder()
             .setNodeIdentity(follow.getNodeIdentity())
-            .setApplyIndex(follow.getApplyIndex())
+            .setSynchronizedApplyIndex(follow.getApplyIndex())
             .build();
         LeaderState leaderState = leaderStateManager.getLeaderState();
         if (!leaderStateManager.isLeader(leaderState)) {
@@ -142,15 +143,20 @@ public class ClientMessageHandler {
         }
         // We fallback to zero - zero is never a valid seq num as client must send nextSeqNum
         // (nextSeqNum=lastSeqNum + 1)
-        Long seqNum = clientSequenceNumberProvider.apply(follow.getNodeIdentity()).orElse(0L);
+        Long seqNum = clientSequenceNumberProvider.apply(follow.getNodeIdentity())
+            .orElse(0L);
         // Respond a follow response for either new or existing follower
-        builder.setFollowResponse(FollowResponse.newBuilder().setNodeSequenceNumber(seqNum));
+        builder.setFollowResponse(FollowResponse.newBuilder()
+            .setNodeSequenceNumber(seqNum));
       }
       catch (InterruptedException | S2CStoppedException e) {
         if (e instanceof InterruptedException) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
-        log.debug().setCause(e).log("Error while handling follow request");
+        log.debug()
+            .setCause(e)
+            .log("Error while handling follow request");
         builder.setInternalError(InternalError.getDefaultInstance());
       }
       finally {
@@ -162,11 +168,13 @@ public class ClientMessageHandler {
 
   public S2CMessage handleStateRequest(String correlationId, StateRequest stateRequest) {
 
-    S2CMessage.Builder messageBuilder = S2CMessage.newBuilder().setCorrelationId(correlationId);
-    var logBuilder = log.debug().addKeyValue("correlationId", correlationId);
+    S2CMessage.Builder messageBuilder = S2CMessage.newBuilder()
+        .setCorrelationId(correlationId);
+    var logBuilder = log.debug()
+        .addKeyValue("correlationId", correlationId);
     concurrentStateReqHandling.incrementAndGet();
-
-    stateLock.readLock().lock();
+    stateLock.readLock()
+        .lock();
     try {
       leader = true;
       LeaderState leaderState = leaderStateManager.getLeaderState();
@@ -174,6 +182,7 @@ public class ClientMessageHandler {
         logBuilder.log("Cannot handle because not leader");
         rejectedStateRequestsNotLeader.increment();
         messageBuilder.setNotLeaderError(NotLeaderError.getDefaultInstance());
+        
       } else {
         guardedLeaderStarting.read(leaderStarting -> {
           if (leaderStarting) {
@@ -182,15 +191,16 @@ public class ClientMessageHandler {
             rejectedStateRequestsLeaderStarting.increment();
             return;
           }
-          
+
           if (!leaderStateManager.isFollower(stateRequest.getSourceNode())
-              && !stateRequest.getSourceNode().equals(leaderState.getNodeIdentity())) {
+              && !stateRequest.getSourceNode()
+                  .equals(leaderState.getNodeIdentity())) {
             logBuilder.log("Cannot handle because source node is not follower");
             rejectedStateRequestsNotFollower.increment();
             messageBuilder.setNotFollowerError(NotFollowerError.getDefaultInstance());
             return;
           }
-          
+
           // NodeStateManager is awaiting on RWSequencer to catch up
           // This can otherwise not be true, given the application awaits on this thread
 
@@ -208,7 +218,8 @@ public class ClientMessageHandler {
                 .addKeyValue("correlationId", correlationId)
                 .log("Error while handling request", e);
             if (e instanceof InterruptedException) {
-              Thread.currentThread().interrupt();
+              Thread.currentThread()
+                  .interrupt();
             }
           }
           return;
@@ -217,9 +228,12 @@ public class ClientMessageHandler {
     }
     catch (InterruptedException | S2CStoppedException e) {
       if (e instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
+        Thread.currentThread()
+            .interrupt();
       }
-      log.debug().setCause(e).log("Error while handling state request");
+      log.debug()
+          .setCause(e)
+          .log("Error while handling state request");
       messageBuilder.setInternalError(InternalError.getDefaultInstance());
     }
     finally {
@@ -227,7 +241,8 @@ public class ClientMessageHandler {
       if (messageBuilder.hasNotLeaderError()) {
         leader = false;
       }
-      stateLock.readLock().unlock();
+      stateLock.readLock()
+          .unlock();
     }
 
     return messageBuilder.build();
@@ -238,11 +253,12 @@ public class ClientMessageHandler {
     try {
       ByteString result = stateRequestHandler.handle(correlationId, stateRequest);
       messageBuilder.setStateRequestResponse(StateRequestResponse.newBuilder()
-          .setApplicationResult(ApplicationResult.newBuilder().setBody(result))
+          .setApplicationResult(ApplicationResult.newBuilder()
+              .setBody(result))
           .build());
       succeededStateRequests.increment();
     }
-    catch (StateRequestException e) {
+    catch (StateRequestHandlingException e) {
       log.debug()
           .setCause(e)
           .addKeyValue("correlationId", correlationId)
@@ -258,9 +274,14 @@ public class ClientMessageHandler {
         messageBuilder.setNotLeaderError(NotLeaderError.getDefaultInstance());
       }
       case ApplicationException ex -> {
-        failedStateRequests.increment();
-        messageBuilder.setApplicationError(
-            ApplicationError.newBuilder().setErrorMsg(ex.getMessage()).build());
+        if (stateRequest.getInternal()) {
+          messageBuilder.setInternalError(InternalError.getDefaultInstance());
+        } else {
+          failedStateRequests.increment();
+          messageBuilder.setApplicationError(ApplicationError.newBuilder()
+              .setErrorMsg(ex.getMessage())
+              .build());
+        }
       }
       case ApplicationResultUnavailableException ex -> {
         messageBuilder.setStateRequestResponse(StateRequestResponse.newBuilder()
@@ -274,12 +295,15 @@ public class ClientMessageHandler {
       if (stateRequest.getSequenceNumber() == 1) {
         log.info();
       }
-      messageBuilder.setRequestOutOfSequenceError(
-          RequestOutOfSequenceError.newBuilder().setNextSeqNum(e.nextSeqNum()));
+      messageBuilder.setRequestOutOfSequenceError(RequestOutOfSequenceError.newBuilder()
+          .setNextSeqNum(e.nextSeqNum()));
     }
     catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Interrupted");
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted");
       messageBuilder.setInternalError(InternalError.getDefaultInstance());
     }
   }
@@ -291,7 +315,8 @@ public class ClientMessageHandler {
 
     heartbeatHandler.accept(Heartbeat.defaultInstance());
 
-    boolean locked = stateLock.writeLock().tryLock();
+    boolean locked = stateLock.writeLock()
+        .tryLock();
     try {
       if (locked && !leader) {
         try {
@@ -299,14 +324,19 @@ public class ClientMessageHandler {
             if (synchronize.hasFollowerTooFarBehindError()) {
               tooFarBehindHandler.run();
             }
-            if (!synchronize.getBatch().getLogEntriesList().isEmpty()) { // Just a heartbeat
-                                                                         // otherwise
+            if (!synchronize.getBatch()
+                .getLogEntriesList()
+                .isEmpty()) { // Just a heartbeat
+                              // otherwise
               if (synchronize.getCommitIndex() != lastAcceptedCommitIndexForSynchronize.get() + 1) {
                 rejectedSynchRequestsIndexOutOfOrder.increment();
                 log.debug()
                     .addKeyValue("correlationId", correlationId)
-                    .addKeyValue("lastAcceptedCommitIndex", lastAcceptedCommitIndexForSynchronize.get())
-                    .addKeyValue("requestCommitIndex", synchronize.getBatch().getCommitIndex())
+                    .addKeyValue("lastAcceptedCommitIndex",
+                        lastAcceptedCommitIndexForSynchronize.get())
+                    .addKeyValue("requestCommitIndex",
+                        synchronize.getBatch()
+                            .getCommitIndex())
                     .log("Synchronize request cannot enqueued as commit index is out of order");
               } else {
                 long before = lastAcceptedCommitIndexForSynchronize.get();
@@ -330,14 +360,17 @@ public class ClientMessageHandler {
           }
         }
         catch (S2CStoppedException e) {
-          log.debug().setCause(e).log("Error while handling synchronize request");
+          log.debug()
+              .setCause(e)
+              .log("Error while handling synchronize request");
         }
 
       }
     }
     finally {
       if (locked) {
-        stateLock.writeLock().unlock();
+        stateLock.writeLock()
+            .unlock();
       }
     }
 

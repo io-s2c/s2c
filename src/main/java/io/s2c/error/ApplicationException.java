@@ -2,7 +2,7 @@ package io.s2c.error;
 
 import java.util.Objects;
 
-public final class ApplicationException extends StateRequestException {
+public final class ApplicationException extends StateRequestHandlingException {
   private static final long serialVersionUID = 6488140240123323978L;
 
   public ApplicationException(String msg) {
