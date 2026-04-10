@@ -124,7 +124,7 @@ public abstract class S2CStateMachine {
 
   protected abstract void loadSnapshot(ByteString snapshot);
 
-  final String name() {
+  protected final String name() {
     return this.name;
   }
 
