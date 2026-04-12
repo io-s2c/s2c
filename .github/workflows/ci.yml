@@ -30,7 +30,7 @@ jobs:
         run: ./gradlew test -Ps3backend=inmemory --no-daemon --info
         env:
           GRADLE_OPTS: "-Xmx1g"
-	
+
 #      - name: Run tests (LocalStack)
 #        run: ./gradlew test -Ps3backend=localstack --no-daemon --info
 #        env:
