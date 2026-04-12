@@ -39,7 +39,11 @@ public abstract class S2CStateMachine {
   }
 
   void consumeRoleTransition(boolean isLeader) {
-
+    handleRoleTransition(isLeader);
+  }
+  
+  protected void handleRoleTransition(boolean isLeader) {
+    
   }
 
   protected final S2CGroupStatus s2cGroupStatus()
