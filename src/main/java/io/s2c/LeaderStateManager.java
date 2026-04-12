@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -75,6 +76,7 @@ public class LeaderStateManager implements AutoCloseable {
   private final Supplier<Long> applyIndexSupplier;
   private final Supplier<S2CClient> s2cClientFactory;
   private final S2COptions s2cOptions;
+  private final Consumer<LeaderState> prepareRoleTransition;
   private volatile boolean stopped = false;
 
   public LeaderStateManager(Function<StructuredLogger, ObjectReader> objectReaderFactory,
@@ -83,6 +85,7 @@ public class LeaderStateManager implements AutoCloseable {
       ContextProvider contextProvider,
       Supplier<S2CClient> s2cClientFactory,
       Supplier<Long> applyIndexSupplier,
+      Consumer<LeaderState> prepareRoleTransition,
       MeterRegistry meterRegistry) {
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.objectReader = objectReaderFactory.apply(log);
@@ -92,6 +95,7 @@ public class LeaderStateManager implements AutoCloseable {
     this.s2cOptions = s2cOptions;
     this.s2cClientFactory = s2cClientFactory;
     this.applyIndexSupplier = applyIndexSupplier;
+    this.prepareRoleTransition = prepareRoleTransition;
     initMetrics(contextProvider.s2cGroupId(), meterRegistry);
 
   }
@@ -143,6 +147,7 @@ public class LeaderStateManager implements AutoCloseable {
   }
 
   private void notifyLeaderChange(LeaderState leaderState) {
+    prepareRoleTransition.accept(leaderState);
     awaiters.forEach(s -> {
       try {
         s.accept(leaderState);

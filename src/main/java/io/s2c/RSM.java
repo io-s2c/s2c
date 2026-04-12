@@ -100,21 +100,15 @@ public class RSM {
     }
   }
 
-  // This is never called concurrently, but lock to apply only if not catching up. Otherwise do
-  // nothing.
-  public boolean applyLogEntriesBatchQuietly(LogEntriesBatch next) {
-    if (applyLock.tryLock()) {
-      try {
-        if (applyIndex + 1 == next.getCommitIndex()) {
-          doApplyLogEntriesBatchQuietly(next);
-          return true;
-        }
-      }
-      finally {
-        applyLock.unlock();
-      }
+  // This is never called concurrently, no lock needed. Role transition is protected by
+  // S2CNode::prepareRoleTransition
+  public void applyLogEntriesBatchQuietly(LogEntriesBatch next) {
+    if (applyIndex + 1 == next.getCommitIndex()) {
+      doApplyLogEntriesBatchQuietly(next);
+    } else {
+      // Order must be ensured by ClientMessageHandler
+      throw new IllegalStateException("Batch out of sequence");
     }
-    return false;
   }
 
   private void doApplyLogEntriesBatchQuietly(LogEntriesBatch next) {

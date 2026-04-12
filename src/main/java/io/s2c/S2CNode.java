@@ -258,6 +258,7 @@ public class S2CNode implements AutoCloseable {
         contextProvider,
         s2cClientCurriedFactory.apply(ClientRole.IS_ALIVE_CHECKER),
         rsm::applyIndex,
+        this::prepareRoleTransition,
         meterRegistry);
 
     this.synchronizeManager = new SynchronizeManager(s2cLog,
@@ -305,7 +306,7 @@ public class S2CNode implements AutoCloseable {
         this::cleanSnapshottedEntries,
         s2cOptions,
         meterRegistry);
-    this.asyncBatchApplier = new AsyncBatchApplier(rsm, contextProvider, s2cOptions);
+    this.asyncBatchApplier = new AsyncBatchApplier(rsm, leaderStateManager, contextProvider, s2cOptions);
     this.clientMessageHandler = new ClientMessageHandler(contextProvider,
         leaderStateManager,
         leaderHealthMonitor::registerHeartbeat,
@@ -445,7 +446,7 @@ public class S2CNode implements AutoCloseable {
     taskExecutor.start("state-requests-handler", stateRequestHandler);
     taskExecutor.start("snapshotting-worker", snapshottingWorker);
     taskExecutor.start("leader-health-monitor", leaderHealthMonitor);
-    taskExecutor.start("role-notifier", Task.of(() -> startRoleTransitionsNotifier()));
+    taskExecutor.start("role-notifier", Task.of(this::startRoleTransitionsNotifier));
   }
 
   private void startRoleTransitionsNotifier() {
@@ -538,6 +539,19 @@ public class S2CNode implements AutoCloseable {
           .setCause(e)
           .log("Error while resetting leader state");
       closeQuietly();
+    }
+  }
+  
+  
+  private void prepareRoleTransition(LeaderState leaderState) {
+    if (leaderStateManager.isLeader(leaderState)) {
+      try {
+        asyncBatchApplier.clear();
+      }
+      catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        closeQuietly();
+      }
     }
   }
 

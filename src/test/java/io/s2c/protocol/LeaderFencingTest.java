@@ -73,7 +73,7 @@ class LeaderFencingTest {
 
   private final AtomicLong applyIndex = new AtomicLong();
   private final AtomicLong applyIndex2 = new AtomicLong();
-
+  
   @Mock
   private S2CClient s2cClient;
 
@@ -93,10 +93,10 @@ class LeaderFencingTest {
         bucket, l, s2cOptions.s2cRetryOptions());
 
     leaderStateManager = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
-        s2cOptions, contextProvider, () -> s2cClient, applyIndex::get, meterRegistry);
+        s2cOptions, contextProvider, () -> s2cClient, applyIndex::get, l -> {}, meterRegistry);
 
     leaderStateManager2 = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
-        s2cOptions, contextProvider2, () -> s2cClient, applyIndex2::get, meterRegistry);
+        s2cOptions, contextProvider2, () -> s2cClient, applyIndex2::get, l -> {}, meterRegistry);
   }
 
   @Test

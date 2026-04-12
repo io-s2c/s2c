@@ -3,7 +3,6 @@ package io.s2c;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -80,7 +79,6 @@ public class ClientMessageHandler {
   private Counter duplicateFollowRequests;
   private Counter rejectedFollowRequests;
 
-  private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
   private volatile boolean leader = false;
 
   public ClientMessageHandler(ContextProvider contextProvider,
@@ -173,8 +171,7 @@ public class ClientMessageHandler {
     var logBuilder = log.debug()
         .addKeyValue("correlationId", correlationId);
     concurrentStateReqHandling.incrementAndGet();
-    stateLock.readLock()
-        .lock();
+
     try {
       leader = true;
       LeaderState leaderState = leaderStateManager.getLeaderState();
@@ -182,7 +179,7 @@ public class ClientMessageHandler {
         logBuilder.log("Cannot handle because not leader");
         rejectedStateRequestsNotLeader.increment();
         messageBuilder.setNotLeaderError(NotLeaderError.getDefaultInstance());
-        
+
       } else {
         guardedLeaderStarting.read(leaderStarting -> {
           if (leaderStarting) {
@@ -241,8 +238,6 @@ public class ClientMessageHandler {
       if (messageBuilder.hasNotLeaderError()) {
         leader = false;
       }
-      stateLock.readLock()
-          .unlock();
     }
 
     return messageBuilder.build();
@@ -315,63 +310,53 @@ public class ClientMessageHandler {
 
     heartbeatHandler.accept(Heartbeat.defaultInstance());
 
-    boolean locked = stateLock.writeLock()
-        .tryLock();
-    try {
-      if (locked && !leader) {
-        try {
-          if (!leaderStateManager.isLeader(leaderStateManager.getLeaderState())) {
-            if (synchronize.hasFollowerTooFarBehindError()) {
-              tooFarBehindHandler.run();
-            }
-            if (!synchronize.getBatch()
-                .getLogEntriesList()
-                .isEmpty()) { // Just a heartbeat
-                              // otherwise
-              if (synchronize.getCommitIndex() != lastAcceptedCommitIndexForSynchronize.get() + 1) {
-                rejectedSynchRequestsIndexOutOfOrder.increment();
-                log.debug()
+    if (!leader) {
+      try {
+        if (!leaderStateManager.isLeader(leaderStateManager.getLeaderState())) {
+          if (synchronize.hasFollowerTooFarBehindError()) {
+            tooFarBehindHandler.run();
+          }
+          if (!synchronize.getBatch()
+              .getLogEntriesList()
+              .isEmpty()) { // Just a heartbeat
+                            // otherwise
+            if (synchronize.getCommitIndex() != lastAcceptedCommitIndexForSynchronize.get() + 1) {
+              rejectedSynchRequestsIndexOutOfOrder.increment();
+              log.debug()
+                  .addKeyValue("correlationId", correlationId)
+                  .addKeyValue("lastAcceptedCommitIndex",
+                      lastAcceptedCommitIndexForSynchronize.get())
+                  .addKeyValue("requestCommitIndex",
+                      synchronize.getBatch()
+                          .getCommitIndex())
+                  .log("Synchronize request cannot enqueued as commit index is out of order");
+            } else {
+              long before = lastAcceptedCommitIndexForSynchronize.get();
+              long lastAcceptedCommitIndex = asyncBatchApplier.apply(synchronize.getBatch());
+              if (lastAcceptedCommitIndex > before) {
+                succeededSynchRequests.increment();
+                log.trace()
                     .addKeyValue("correlationId", correlationId)
-                    .addKeyValue("lastAcceptedCommitIndex",
-                        lastAcceptedCommitIndexForSynchronize.get())
-                    .addKeyValue("requestCommitIndex",
-                        synchronize.getBatch()
-                            .getCommitIndex())
-                    .log("Synchronize request cannot enqueued as commit index is out of order");
+                    .addKeyValue("applyIndex", applyIndexSupplier.get())
+                    .log("Synchronize request enqueued for handling");
+                lastAcceptedCommitIndexForSynchronize.set(lastAcceptedCommitIndex);
               } else {
-                long before = lastAcceptedCommitIndexForSynchronize.get();
-                long lastAcceptedCommitIndex = asyncBatchApplier.apply(synchronize.getBatch());
-                if (lastAcceptedCommitIndex > before) {
-                  succeededSynchRequests.increment();
-                  log.trace()
-                      .addKeyValue("correlationId", correlationId)
-                      .addKeyValue("applyIndex", applyIndexSupplier.get())
-                      .log("Synchronize request enqueued for handling");
-                  lastAcceptedCommitIndexForSynchronize.set(lastAcceptedCommitIndex);
-                } else {
-                  log.trace()
-                      .addKeyValue("correlationId", correlationId)
-                      .log("Couldn't enqueue synchronize request as queue is full.");
-                  rejectedSynchRequestsQueueFull.increment();
-                }
+                log.trace()
+                    .addKeyValue("correlationId", correlationId)
+                    .log("Couldn't enqueue synchronize request as queue is full.");
+                rejectedSynchRequestsQueueFull.increment();
               }
             }
-
           }
-        }
-        catch (S2CStoppedException e) {
-          log.debug()
-              .setCause(e)
-              .log("Error while handling synchronize request");
-        }
 
+        }
       }
-    }
-    finally {
-      if (locked) {
-        stateLock.writeLock()
-            .unlock();
+      catch (S2CStoppedException e) {
+        log.debug()
+            .setCause(e)
+            .log("Error while handling synchronize request");
       }
+
     }
 
     var syncRes = SynchronizeResponse.newBuilder()

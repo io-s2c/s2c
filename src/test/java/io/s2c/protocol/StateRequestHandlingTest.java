@@ -92,7 +92,7 @@ class StateRequestHandlingTest {
         s2cOptions, contextProvider,
         () -> new S2CClient(s2cOptions, contextProvider, meterRegistry, r -> {
         }, () -> S2CMessageReader.create(s2cOptions.maxMessageSize()), ClientRole.IS_ALIVE_CHECKER),
-        () -> 0L, meterRegistry);
+        () -> 0L, (l) -> {}, meterRegistry);
 
     s2cLog = new S2CLog(objectReaderFactory, objectWriterFactory, contextProvider, s2cOptions,
         meterRegistry);
