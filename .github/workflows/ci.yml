@@ -46,7 +46,7 @@ jobs:
           retention-days: 7
 
       - name: Upload test results
-        uses: dorny/test-reporter@0a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # https://github.com/dorny/test-reporter/releases/tag/v3.0.0
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # https://github.com/dorny/test-reporter/releases/tag/v3.0.0
         if: always()
         with:
           name: Gradle tests
