@@ -36,7 +36,7 @@ jobs:
 #        env:
 #          GRADLE_OPTS: "-Xmx1g -Xlog:gc"
 
-      - name: Upload test results
+      - name: Upload test logs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # https://github.com/actions/upload-artifact/releases/tag/v7.0.1
         if: always()
         with:
@@ -45,6 +45,15 @@ jobs:
             logs/
           retention-days: 7
 
+      - name: Upload test results
+        uses: dorny/test-reporter@0a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # https://github.com/dorny/test-reporter/releases/tag/v3.0.0
+        if: always()
+        with:
+          name: Gradle tests
+          path: |
+            **/build/test-results/**/*.xml
+          reporter: java-junit
+			  
   publish:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
