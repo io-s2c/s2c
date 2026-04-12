@@ -53,7 +53,7 @@ jobs:
           path: |
             **/build/test-results/**/*.xml
           reporter: java-junit
-			  
+
   publish:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
