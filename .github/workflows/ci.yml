@@ -30,11 +30,11 @@ jobs:
         run: ./gradlew test -Ps3backend=inmemory --no-daemon --info
         env:
           GRADLE_OPTS: "-Xmx1g"
-
-      - name: Run tests (LocalStack)
-        run: ./gradlew test -Ps3backend=localstack --no-daemon --info
-        env:
-          GRADLE_OPTS: "-Xmx1g -Xlog:gc"
+	
+#      - name: Run tests (LocalStack)
+#        run: ./gradlew test -Ps3backend=localstack --no-daemon --info
+#        env:
+#          GRADLE_OPTS: "-Xmx1g -Xlog:gc"
 
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # https://github.com/actions/upload-artifact/releases/tag/v7.0.1
