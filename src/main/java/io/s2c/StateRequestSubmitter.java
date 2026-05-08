@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 
 import org.slf4j.Logger;
@@ -12,16 +13,15 @@ import org.slf4j.LoggerFactory;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.s2c.configs.S2COptions;
-import io.s2c.error.ConnectTimeoutException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
+import io.s2c.model.messages.NotLeaderError;
 import io.s2c.model.messages.S2CMessage;
 import io.s2c.model.messages.StateRequest;
 import io.s2c.model.state.LeaderState;
 import io.s2c.network.S2CClient;
 import io.s2c.network.error.ClientNotConnectedException;
 import io.s2c.network.error.ClientStoppedException;
-import io.s2c.network.error.UnknownHostException;
 import io.s2c.util.BackoffCounter;
 
 public class StateRequestSubmitter implements AutoCloseable {
@@ -34,6 +34,9 @@ public class StateRequestSubmitter implements AutoCloseable {
   private final S2CClient s2cClient;
   private final S2COptions s2cOptions;
   private final ContextProvider contextProvider;
+
+  private final AtomicBoolean resetting = new AtomicBoolean();
+
   private volatile boolean closed = false;
   private volatile long lowestSeqNum = Long.MAX_VALUE;
   private Timer submitLatency;
@@ -52,7 +55,7 @@ public class StateRequestSubmitter implements AutoCloseable {
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.s2cOptions = s2cOptions;
     this.contextProvider = contextProvider;
-    
+
     submitLatency = Timer.builder("state.request.submit.latency")
         .description("The end to end latency of a submitted request handled by the leader")
         .register(meterRegistry);
@@ -65,14 +68,13 @@ public class StateRequestSubmitter implements AutoCloseable {
     if (stateRequest.getSequenceNumber() < lowestSeqNum) {
       lowestSeqNum = stateRequest.getSequenceNumber();
     }
-    BackoffCounter errorBackoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
+
+    BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
         .build();
-    BackoffCounter unlimitedBackoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
-        .unlimited()
-        .build();
-    
+
     S2CMessage s2cMessage = S2CMessage.newBuilder()
-        .setCorrelationId(UUID.randomUUID().toString())
+        .setCorrelationId(UUID.randomUUID()
+            .toString())
         .setStateRequest(stateRequest)
         .build();
 
@@ -85,98 +87,70 @@ public class StateRequestSubmitter implements AutoCloseable {
       try {
         S2CMessage response = send(s2cMessage, leaderState);
         if (response.hasRequestOutOfSequenceError()) {
-          long backOff = Math.max(0, stateRequest.getSequenceNumber()
-              - response.getRequestOutOfSequenceError().getNextSeqNum());
+          long backOff = Math.max(0,
+              stateRequest.getSequenceNumber() - response.getRequestOutOfSequenceError()
+                  .getNextSeqNum());
           TimeUnit.MILLISECONDS.sleep(backOff);
-          continue;
         } else if (response.hasNotLeaderError()) {
           if (stateRequest.getLeaderCommand()) {
             return response;
           }
           log.debug()
               .log("Leader responded with NotLeaderError. Checking leader state then retrying");
-          leaderState = leaderStateManager.checkLeaderState(leaderState);
-          s2cClient.disconnect();
-          errorBackoffCounter.reset();
-          continue;
+          // Check then await above NodeStateManager to connect
+          leaderStateManager.checkLeaderState(leaderState);
         } else if (response.hasInternalError()) {
-          log.debug().log("Leader responded with internal error.");
-          unlimitedBackoffCounter.awaitNextAttempt();
-          continue;
+          log.debug()
+              .log("Leader responded with internal error.");
+          backoffCounter.awaitNextAttempt();
         } else if (response.hasSlowDownError()) {
-          log.debug().log("Leader responded with slow down error");
-          unlimitedBackoffCounter.awaitNextAttempt();
-          continue;
+          log.debug()
+              .log("Leader responded with slow down error");
+          backoffCounter.awaitNextAttempt();
         } else if (response.hasLeaderStartingError()) {
-          log.debug().log("Leader responded with leader starting error");
-          unlimitedBackoffCounter.awaitNextAttempt();
-          continue;
-        } else if (response.hasNotFollowerError()) { // This can happen when the same leader node has restarted
-          log.debug().log("Leader responded with not follower error, resetting leader state");
-          leaderStateManager.resetLeaderState();
-          continue;
+          log.debug()
+              .log("Leader responded with leader starting error");
+          backoffCounter.awaitNextAttempt();
+        } else if (response.hasNotFollowerError()) { // This can happen when the same leader node
+                                                     // has restarted
+          log.debug()
+              .log("Leader responded with not follower error, resetting leader state");
+          if (resetting.compareAndSet(false, true)) {
+            leaderStateManager.resetLeaderState();
+            resetting.set(false);
+          } else {
+            leaderStateManager.getLeaderState(); // Block while other thread is resetting
+          }
         } else {
-          unlimitedBackoffCounter.reset();
-          errorBackoffCounter.reset();
+          backoffCounter.reset();
           return response;
         }
       }
-      catch (IOException | ClientNotConnectedException e) {
-        log.debug().setCause(e).log("Error while sending.");
-        log.debug().log("Reconnecting...");
-        if (reconnect(leaderState)) {
-          log.debug().log("Reconnected successfully");
-          errorBackoffCounter.reset();
-          continue;
-        } else {
-          leaderState = leaderStateManager.checkLeaderState(leaderState);
-          // Fail pending requests - reconnect on next iteration
-          s2cClient.disconnect();
-          unlimitedBackoffCounter.reset();
-          errorBackoffCounter.reset();
-          continue;
-        }
-      }
-      catch (TimeoutException e) {
+      catch (IOException | ClientNotConnectedException | TimeoutException e) {
         log.debug()
             .setCause(e)
-            .addKeyValue("leaderNodeIdentity", leaderState.getNodeIdentity())
-            .log("Request timed out.");
-      }
-      // If timed-out or no successful response
-      if (errorBackoffCounter.canAttempt()) {
-        errorBackoffCounter.enrich(log.debug()).log("Retrying..");
-        errorBackoffCounter.awaitNextAttempt();
-      } else {
-        leaderState = leaderStateManager.checkLeaderState(leaderState);
-        // Fail other threads
-        s2cClient.disconnect();
-        if (!leaderStateManager.isLeader(leaderState)) {
-          reconnect(leaderState);
+            .log("Error while sending.");
+        // Timeout might also mean the leader is active but busy, that's why we don't trigger
+        // leadership check
+        // and leave this to the LeaderHealthMonitor which will trigger a leadership reset if leader
+        // stopped sending heartbeats
+        if (!backoffCounter.canAttempt()) {
+          // Trigger reconnect by NodeStateManager
+          if (resetting.compareAndSet(false, true)) {
+            leaderStateManager.resetLeaderState();
+            nodeStateManager.awaitJoined();
+            resetting.set(false);
+          } else {
+            leaderStateManager.getLeaderState(); // Block while other thread is resetting
+          }
+          backoffCounter.reset();
+        } else {
+          backoffCounter.enrich(log.debug())
+              .log("Retrying...");
+          backoffCounter.awaitNextAttempt();
         }
-        unlimitedBackoffCounter.reset();
-        errorBackoffCounter.reset();
       }
     }
-  }
-
-  private boolean reconnect(LeaderState leaderState) throws InterruptedException {
-    BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
-        .build();
-    try {
-      s2cClient.disconnect();
-      s2cClient.connect(leaderState.getNodeIdentity());
-      return true;
-    }
-    catch (ConnectTimeoutException | UnknownHostException | IOException
-        | ClientNotConnectedException e) {
-      log.debug().setCause(e).log("Error while reconnecting to leader");
-    }
-    if (backoffCounter.canAttempt()) {
-      backoffCounter.enrich(log.debug()).log("Retrying");
-      backoffCounter.awaitNextAttempt();
-    }
-    return false;
   }
 
   @Override
@@ -188,17 +162,23 @@ public class StateRequestSubmitter implements AutoCloseable {
       throws InterruptedException, IOException, ClientStoppedException, TimeoutException,
       ClientNotConnectedException {
     S2CMessage response = null;
-    var logBuilder = log.debug().addKeyValue("correlationId", s2cMessage.getCorrelationId());
+    var logBuilder = log.debug()
+        .addKeyValue("correlationId", s2cMessage.getCorrelationId());
     if (leaderStateManager.isLeader(leaderState)) {
       // Handle request on the local state machine
       response = localHandler.apply(s2cMessage.getCorrelationId(), s2cMessage.getStateRequest());
     } else {
+      if (s2cMessage.getStateRequest()
+          .getLeaderCommand()) {
+        return S2CMessage.newBuilder()
+            .setNotLeaderError(NotLeaderError.getDefaultInstance())
+            .build();
+      }
       Timer.Sample sample = Timer.start();
-      
       response = s2cClient.send(s2cMessage, s2cOptions.requestTimeoutMs());
-      
       sample.stop(submitLatency);
-      logBuilder.addKeyValue("response", response).log("Response received");
+      logBuilder.addKeyValue("response", response)
+          .log("Response received");
     }
     return response;
   }

@@ -39,7 +39,7 @@ public class SynchronizeManager implements AutoCloseable {
     this.s2cOptions = s2cOptions;
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(SynchronizeManager.class),
-        log.uncaughtExceptionLogger(), meterRegistry);
+        meterRegistry);
     this.contextProvider = contextProvider;
     this.leaderStateManager = leaderStateManager;
     this.s2cClientFactory = s2cClientFactory;
@@ -51,28 +51,42 @@ public class SynchronizeManager implements AutoCloseable {
   }
 
   public void syncFollower(FollowerInfo followerInfo) {
-    FollowerSynchronizer synchronizer = new FollowerSynchronizer(followerInfo, s2cLog,
-        f -> synchronizers.remove(f.getNodeIdentity()), s2cOptions, contextProvider,
-        s2cClientFactory, leaderStateManager, meterRegistry);
-    taskExecutor.start("%s-synchronizer".formatted(followerInfo.getNodeIdentity().getId()),
-        synchronizer);
-    synchronizers.put(followerInfo.getNodeIdentity(), synchronizer);
+    FollowerSynchronizer synchronizer = synchronizers.computeIfAbsent(
+        followerInfo.getNodeIdentity(),
+        id -> new FollowerSynchronizer(followerInfo,
+            s2cLog,
+            f -> synchronizers.remove(f.getNodeIdentity()),
+            s2cOptions,
+            contextProvider,
+            s2cClientFactory,
+            leaderStateManager,
+            meterRegistry));
+    if (synchronizer != null) {
+      taskExecutor.start("%s-synchronizer".formatted(followerInfo.getNodeIdentity()
+          .getId()), synchronizer);
+    }
   }
 
   public void syncCommit(Long commitIndex) {
-    synchronizers.values().forEach(s -> s.syncToCommitIndex(commitIndex));
+    synchronizers.values()
+        .forEach(s -> s.syncToCommitIndex(commitIndex));
   }
 
   @Override
   public void close() throws InterruptedException {
-    synchronizers.values().forEach(s -> {
-      try {
-        s.close();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        log.debug().setCause(e).log("Interrupted");
-      }
-    });
+    synchronizers.values()
+        .forEach(s -> {
+          try {
+            s.close();
+          }
+          catch (InterruptedException e) {
+            Thread.currentThread()
+                .interrupt();
+            log.debug()
+                .setCause(e)
+                .log("Interrupted");
+          }
+        });
     taskExecutor.close();
   }
 

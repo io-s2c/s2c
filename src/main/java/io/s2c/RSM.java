@@ -285,8 +285,12 @@ public class RSM {
         Thread.currentThread()
             .interrupt();
       }
-      // Will be translated to InternalError the StateRequestHandler
-      throw new ApplicationException("Error while handling internal state request", e);
+      // Will be translated to InternalError by ClientMessageHandler
+      String msg = "Error while handling internal state request";
+      log.debug()
+          .setCause(e)
+          .log(msg);
+      throw new ApplicationException(msg);
     }
   }
 

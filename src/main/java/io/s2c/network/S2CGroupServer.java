@@ -2,8 +2,9 @@ package io.s2c.network;
 
 import java.io.IOException;
 import java.net.Socket;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -18,6 +19,7 @@ import io.s2c.ContextProvider;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.Handshake;
 import io.s2c.model.messages.S2CMessage;
+import io.s2c.model.state.NodeIdentity;
 import io.s2c.network.error.FatalServerException;
 import io.s2c.network.message.reader.S2CMessageReader;
 
@@ -28,7 +30,7 @@ public class S2CGroupServer implements AutoCloseable {
   private final Logger logger = LoggerFactory.getLogger(S2CGroupServer.class);
   private final StructuredLogger log;
 
-  private final Set<ClientManager> clientManagers = ConcurrentHashMap.newKeySet();
+  private final Map<NodeIdentity, ClientManager> clientManagers = new ConcurrentHashMap<>();
 
   private volatile boolean closed = false;
 
@@ -82,14 +84,28 @@ public class S2CGroupServer implements AutoCloseable {
         .setCorrelationId(correlationId)
         .setHandshake(handhshake)
         .build();
-
-    clientMessageAcceptor.acceptIn(handshakeMsg);
-
-    ClientManager clientManager = new ClientManager(client, clientManagers::remove, contextProvider,
-        clientMessageAcceptor, s2cMessageReaderFactory, meterRegistry);
-
-    clientManagers.add(clientManager);
-
+    
+    var interruptedExcetpion = new AtomicReference<InterruptedException>();
+    
+    clientManagers.compute(handhshake.getNodeIdentity(), (id, cm) -> {
+      try {
+        if (cm != null) {
+          cm.close();
+        }
+        clientMessageAcceptor.acceptIn(handshakeMsg);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        interruptedExcetpion.set(e);
+      }
+      
+      return new ClientManager(client, clientManagers::remove, contextProvider,
+          clientMessageAcceptor, s2cMessageReaderFactory, meterRegistry);
+    });
+    
+    if (interruptedExcetpion.get() != null) {
+      throw interruptedExcetpion.get();
+    }
+    
     log.debug().addKeyValue("correlationId", correlationId).log("Serving client.");
   }
 
@@ -137,7 +153,7 @@ public class S2CGroupServer implements AutoCloseable {
       acceptLock.lock();
       if (!closed) {
         closed = true;
-        for (ClientManager cm : clientManagers) {
+        for (ClientManager cm : clientManagers.values()) {
           cm.close();
         }
         clientManagers.clear();

@@ -52,7 +52,7 @@ public class S2CLog implements AutoCloseable {
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.lruCache = new LRUCache<>(s2cOptions.logLruCacheSize(), this::getDurableBatch);
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(S2CLog.class),
-        log.uncaughtExceptionLogger(), meterRegistry);
+        meterRegistry);
     this.objectReader = objectReaderFactory.apply(log);
     this.objectWriter = objectWriterFactory.apply(log);
     this.s2cOptions = s2cOptions;

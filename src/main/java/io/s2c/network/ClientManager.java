@@ -31,13 +31,13 @@ class ClientManager implements AutoCloseable {
   private final TaskExecutor taskExecutor;
 
   private final S2CMessageReader s2cMessageReader;
-  private final Consumer<ClientManager> freeUp;
+  private final Consumer<NodeIdentity> freeUp;
   private final ClientMessageAcceptor clientMessageAcceptor;
 
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
   public ClientManager(Client client,
-      Consumer<ClientManager> freeUp,
+      Consumer<NodeIdentity> freeUp,
       ContextProvider contextProvider,
       ClientMessageAcceptor clientMessageAcceptor,
       Supplier<S2CMessageReader> s2cMessageReaderFactory,
@@ -47,7 +47,7 @@ class ClientManager implements AutoCloseable {
 
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(ClientManager.class),
-        log.uncaughtExceptionLogger(), meterRegistry);
+        meterRegistry);
 
     s2cMessageReader = s2cMessageReaderFactory.get();
     this.clientMessageAcceptor = clientMessageAcceptor;
@@ -137,7 +137,7 @@ class ClientManager implements AutoCloseable {
       catch (IOException e) {
         log.debug().setCause(e).log("Error while closing socket");
       }
-      freeUp.accept(this);
+      freeUp.accept(this.nodeIdentity());
       taskExecutor.close();
       clientMessageAcceptor.close();
       log.debug()

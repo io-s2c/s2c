@@ -204,12 +204,12 @@ public class S2CNode implements AutoCloseable {
         s2cOptions.logNodeIdentity());
     s2cStateMachineRegistry = new S2CStateMachineRegistry(this,
         this::submitStateRequest,
-        this::nextSequenceNumber);
+        this::nextSequenceNumber,
+        this::applyIndex);
 
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
 
     taskExecutor = new TaskExecutor(contextProvider.ownerName(S2CNode.class),
-        log.uncaughtExceptionLogger(),
         meterRegistry);
 
     Function<ClientRole, Supplier<S2CClient>> s2cClientCurriedFactory = newS2CClientCurriedFactory(
@@ -289,10 +289,7 @@ public class S2CNode implements AutoCloseable {
         s2cOptions,
         meterRegistry);
 
-    this.leaderHealthMonitor = new LeaderHealthMonitor(leaderStateManager,
-        s2cOptions.maxMissedHeartbeats(),
-        s2cOptions.leaderHeartbeatTimeoutMs(),
-        contextProvider);
+
 
     s2cClient = s2cClientCurriedFactory.apply(ClientRole.FOLLOWER)
         .get();
@@ -306,6 +303,13 @@ public class S2CNode implements AutoCloseable {
         this::cleanSnapshottedEntries,
         s2cOptions,
         meterRegistry);
+    
+    this.leaderHealthMonitor = new LeaderHealthMonitor(leaderStateManager,
+        nodeStateManager,
+        s2cOptions.maxMissedHeartbeats(),
+        s2cOptions.leaderHeartbeatTimeoutMs(),
+        contextProvider);
+    
     this.asyncBatchApplier = new AsyncBatchApplier(rsm, leaderStateManager, contextProvider, s2cOptions);
     this.clientMessageHandler = new ClientMessageHandler(contextProvider,
         leaderStateManager,

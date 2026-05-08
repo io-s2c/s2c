@@ -87,11 +87,8 @@ class ConsensusTest {
   S2CServer s2cServer1;
   CounterStateMachine counterStateMachine1;
   StringAppender appenderStateMachine1;
-  S2COptions s2cOptions = new S2COptions()
-
-      .s2cRetryOptions(new S2CRetryOptions().baseDelayMS(100).maxDelaySeconds(1))
-      .maxMissedHeartbeats(1000) // We don't want to trigger state transition while dropping
-      // messages
+  S2COptions s2cOptions = new S2COptions().s2cRetryOptions(new S2CRetryOptions().baseDelayMS(100)
+      .maxDelaySeconds(1))
       .logNodeIdentity(true)
       .snapshottingThreshold(10);
   S2CNode s2cNode2;
@@ -288,7 +285,8 @@ class ConsensusTest {
           l.await();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
         int i = 0;
         while (i < 10) {
@@ -307,7 +305,8 @@ class ConsensusTest {
             l.await();
           }
           catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread()
+                .interrupt();
           }
           assertDoesNotThrow(() -> {
             counterStateMachine2.increment();
@@ -325,7 +324,8 @@ class ConsensusTest {
       assertEquals(10, node1valueCounter);
     }
     catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
+      Thread.currentThread()
+          .interrupt();
     }
 
   }
@@ -381,8 +381,9 @@ class ConsensusTest {
       }
 
       executorService.execute(() -> {
-        assertDoesNotThrow(() -> initAndStartNode2(
-            newS2CMessageReaderFactory(s2cOptions.maxMessageSize()), StateMachine.COUNTER));
+        assertDoesNotThrow(
+            () -> initAndStartNode2(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+                StateMachine.COUNTER));
       });
     }
 
@@ -445,7 +446,8 @@ class ConsensusTest {
           latch.countDown();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -454,7 +456,8 @@ class ConsensusTest {
           latch.await();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
         try {
           counterStateMachine1.increment();
@@ -463,7 +466,8 @@ class ConsensusTest {
           cause.set(e);
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -495,7 +499,8 @@ class ConsensusTest {
           shutdownNode1();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -504,7 +509,8 @@ class ConsensusTest {
           latch.await();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
         try {
           // Must retry till succeeds (as a leader because now single node)
@@ -515,7 +521,8 @@ class ConsensusTest {
           cause.set(e);
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -552,7 +559,8 @@ class ConsensusTest {
           shutdownNode1();
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -569,7 +577,8 @@ class ConsensusTest {
             cause.set(e);
           }
           catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread()
+                .interrupt();
           }
           i++;
           if (i == 2) {
@@ -596,16 +605,8 @@ class ConsensusTest {
 
     CountDownLatch startedDroppingAll = new CountDownLatch(1);
 
-    initAndStartNode1(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> {
-
-      if (dropAll.get()) {
-        startedDroppingAll.countDown();
-        return 1;
-      } else {
-        return 2;
-      }
-    }, Set.of(Failure.DROP), m -> {
-    }), StateMachine.COUNTER);
+    initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+        StateMachine.COUNTER);
 
     AtomicBoolean node1IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
       return s2cNode1.isLeader();
@@ -613,8 +614,15 @@ class ConsensusTest {
 
     assertTrue(node1IsLeader.get());
 
-    initAndStartNode2(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
-        StateMachine.COUNTER);
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> {
+      if (dropAll.get()) {
+        startedDroppingAll.countDown();
+        return 1;
+      } else {
+        return 0;
+      }
+    }, Set.of(Failure.DROP), m -> {
+    }), StateMachine.COUNTER);
 
     AtomicBoolean node2IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
       return s2cNode2.isLeader();
@@ -645,13 +653,14 @@ class ConsensusTest {
               startedDroppingAll.await();
             }
             catch (InterruptedException e) {
-              Thread.currentThread().interrupt();
+              Thread.currentThread()
+                  .interrupt();
             }
 
             try {
-              // Retry till becomes leader
+              // Now heartbeats, follow and state responses are dropped by Node2
               counterStateMachine2.increment();
-              // Node1 started drop message, so we became leader
+              // Leadership attempt must have been made.
               if (s2cNode2.isLeader()) {
                 node2BecameLeaderLatch.countDown();
               }
@@ -679,7 +688,7 @@ class ConsensusTest {
           // Now node2 must be leader
           node2BecameLeaderLatch.await();
 
-          // So that we can receive the response
+          // So that we can send follow request
           dropAll.set(false);
 
           node1IsLeader.set(assertDoesNotThrow(() -> s2cNode1.isLeader()));
@@ -699,7 +708,8 @@ class ConsensusTest {
 
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
         catch (ApplicationException | S2CNodeStoppedException e) {
           cause.set(e);
@@ -717,8 +727,14 @@ class ConsensusTest {
   @Test
   void testCommandsExecutesExactlyOnceDuringChaos() throws IOException, InterruptedException {
 
-    long previousMaxAttempts = s2cOptions.s2cRetryOptions().maxAttempts();
-    s2cOptions.s2cRetryOptions().maxAttempts(100); // to not attempt leadership
+    long previousMaxAttempts = s2cOptions.s2cRetryOptions()
+        .maxAttempts();
+    int previousMissedHeartbeats = s2cOptions.maxMissedHeartbeats();
+
+    s2cOptions.maxMissedHeartbeats(1000) // We don't want node2 to attempt leadership while node1 is
+                                         // restarting
+        .s2cRetryOptions()
+        .maxAttempts(20);
 
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
@@ -729,8 +745,10 @@ class ConsensusTest {
 
     assertTrue(node1IsLeader.get());
 
-    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
-        Set.of(Failure.DROP), m -> {
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
+        () -> 3,
+        Set.of(Failure.DROP),
+        m -> {
         }), StateMachine.COUNTER);
 
     AtomicBoolean node2IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
@@ -773,7 +791,8 @@ class ConsensusTest {
 
         }
         catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+          Thread.currentThread()
+              .interrupt();
         }
       });
 
@@ -781,8 +800,10 @@ class ConsensusTest {
 
     shutdownNode2();
 
-    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
-        Set.of(Failure.DROP), m -> {
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
+        () -> 3,
+        Set.of(Failure.DROP),
+        m -> {
         }), StateMachine.COUNTER);
 
     // We ensure follower receives the correct sequence number after restarting
@@ -790,7 +811,7 @@ class ConsensusTest {
       counterStateMachine2.increment();
     });
 
-    int counterValue = assertDoesNotThrow(() -> counterStateMachine1.get());
+    int counter1Value = assertDoesNotThrow(() -> counterStateMachine1.get());
 
     node1IsLeader = new AtomicBoolean(assertDoesNotThrow(() -> {
       return s2cNode1.isLeader();
@@ -805,9 +826,11 @@ class ConsensusTest {
     assertFalse(node2IsLeader.get());
 
     // +1 last op after follower restart
-    assertEquals(totalOps.get() + 1, counterValue);
-
-    s2cOptions.s2cRetryOptions().maxAttempts(previousMaxAttempts); // reset
+    assertEquals(totalOps.get() + 1, counter1Value);
+    
+    s2cOptions.maxMissedHeartbeats(previousMissedHeartbeats)
+        .s2cRetryOptions()
+        .maxAttempts(previousMaxAttempts); // reset
 
   }
 
@@ -854,7 +877,8 @@ class ConsensusTest {
         ex = e;
       }
       assertNotNull(ex);
-      assertEquals(ex.awsErrorDetails().errorCode(), S3Error.KEY_NOT_FOUND.errorCode());
+      assertEquals(ex.awsErrorDetails()
+          .errorCode(), S3Error.KEY_NOT_FOUND.errorCode());
       j.incrementAndGet();
     }
 
@@ -887,8 +911,10 @@ class ConsensusTest {
     boolean node1Leader = s2cNode1.isLeader();
     assertTrue(node1Leader);
 
-    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(), () -> 3,
-        Set.of(Failure.DROP, Failure.IO_EXCEPTION), m -> {
+    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
+        () -> 3,
+        Set.of(Failure.DROP, Failure.IO_EXCEPTION),
+        m -> {
         }), StateMachine.APPENDER);
 
     boolean node2Ledaer = s2cNode2.isLeader();
@@ -906,16 +932,18 @@ class ConsensusTest {
 
     AtomicReference<ByteString> snapshot = new AtomicReference<>(appenderStateMachine2.snapshot());
 
-    AtomicReference<String> node2Value = new AtomicReference<>(
-        snapshot.get().toString(StandardCharsets.UTF_8));
+    AtomicReference<String> node2Value = new AtomicReference<>(snapshot.get()
+        .toString(StandardCharsets.UTF_8));
     assertDoesNotThrow(() -> {
 
       TestUtil.sleepUntil(300, 500, () -> {
 
         snapshot.set(appenderStateMachine2.snapshot());
-        node2Value.set(snapshot.get().toString(StandardCharsets.UTF_8));
+        node2Value.set(snapshot.get()
+            .toString(StandardCharsets.UTF_8));
 
-        return node2Value.get().equals(node1value);
+        return node2Value.get()
+            .equals(node1value);
       });
     });
 
@@ -974,8 +1002,12 @@ class ConsensusTest {
     };
 
     // We never synchronize, once we know leader detected follower is far behind
-    initAndStartNode2(newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
-        failEverySupplier, Set.of(Failure.DROP), inspector), StateMachine.COUNTER);
+    initAndStartNode2(
+        newChaosS2CMessageReaderFactory(s2cOptions.maxMessageSize(),
+            failEverySupplier,
+            Set.of(Failure.DROP),
+            inspector),
+        StateMachine.COUNTER);
 
     int i = 0;
     while (i < 10) {
@@ -1001,7 +1033,9 @@ class ConsensusTest {
     // Wait till follower has caught up
     TimeUnit.SECONDS.sleep(5);
 
-    int node2Value = counterStateMachine2.snapshot().asReadOnlyByteBuffer().getInt();
+    int node2Value = counterStateMachine2.snapshot()
+        .asReadOnlyByteBuffer()
+        .getInt();
 
     assertTrue(farBehindDetected.get());
     assertEquals(10, node2Value);

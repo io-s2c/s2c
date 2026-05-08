@@ -130,7 +130,7 @@ public class LeaderStateManager implements AutoCloseable {
       if (eTagSnapshot == leaderETag) {
         ensureValidLeaderState(eTagSnapshot);
         long currentEpoch = currentLeaderState.getEpoch();
-        // No new leader
+        // New leader
         if (currentEpoch > oldEpoch) {
           notifyLeaderChange(currentLeaderState);
         }
@@ -605,6 +605,7 @@ public class LeaderStateManager implements AutoCloseable {
     try {
       currentLeaderState = null;
       leaderETag = null;
+      
       getLeaderState();
     }
     finally {

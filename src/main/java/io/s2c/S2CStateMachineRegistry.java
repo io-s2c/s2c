@@ -13,11 +13,16 @@ public class S2CStateMachineRegistry {
   private final S2CNode s2cNode;
   private final SubmitFunction submitFunction;
   private final Supplier<Long> sequenceNumberSupplier;
+  private final Supplier<Long> localApplyIndexSupplier;
 
-  public S2CStateMachineRegistry(S2CNode s2cNode, SubmitFunction submitFunction, Supplier<Long> sequenceNumberSupplier) {
+  public S2CStateMachineRegistry(S2CNode s2cNode,
+      SubmitFunction submitFunction,
+      Supplier<Long> sequenceNumberSupplier,
+      Supplier<Long> localApplyIndexSupplier) {
     this.s2cNode = s2cNode;
     this.submitFunction = submitFunction;
     this.sequenceNumberSupplier = sequenceNumberSupplier;
+    this.localApplyIndexSupplier = localApplyIndexSupplier;
   }
 
   public S2CStateMachine get(String name) {
@@ -26,7 +31,9 @@ public class S2CStateMachineRegistry {
   }
 
   public Set<S2CStateMachine> getAll() {
-    return stateMachines.values().stream().collect(Collectors.toSet());
+    return stateMachines.values()
+        .stream()
+        .collect(Collectors.toSet());
 
   }
 
@@ -37,7 +44,12 @@ public class S2CStateMachineRegistry {
     stateMachines.computeIfAbsent(name, k -> {
       stateMachineReference.set(factory.get());
       stateMachineReference.get()
-          .init(s2cNode.s2cGroupId(), s2cNode.nodeIdentity(), sequenceNumberSupplier, name, submitFunction);
+          .init(s2cNode.s2cGroupId(),
+              s2cNode.nodeIdentity(),
+              sequenceNumberSupplier,
+              localApplyIndexSupplier,
+              name,
+              submitFunction);
       return stateMachineReference.get();
     });
 

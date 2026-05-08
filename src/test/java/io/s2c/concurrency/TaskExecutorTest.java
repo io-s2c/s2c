@@ -25,8 +25,7 @@ class TaskExecutorTest {
 
   @BeforeEach
   void setUp() {
-    taskExecutor = new TaskExecutor("test-owner", (t, e) -> {
-    }, meterRegistry);
+    taskExecutor = new TaskExecutor("test-owner", meterRegistry);
   }
 
   @AfterEach
@@ -67,8 +66,7 @@ class TaskExecutorTest {
   @Test
   void testMaxConcurrency() throws InterruptedException {
 
-    TaskExecutor limitedExecutor = new TaskExecutor("limited", (t, e) -> {
-    }, 2, meterRegistry);
+    TaskExecutor limitedExecutor = new TaskExecutor("limited", 2, meterRegistry);
 
     AtomicInteger interruptions = new AtomicInteger();
     
@@ -112,7 +110,7 @@ class TaskExecutorTest {
 
     AtomicInteger stoppedTasks = new AtomicInteger(0);
     
-    TaskExecutor taskExecutor = new TaskExecutor("", (t, e) -> {}, meterRegistry);
+    TaskExecutor taskExecutor = new TaskExecutor("", meterRegistry);
     
     for (int i = 0; i < 3; i++) {
        taskExecutor.start("task-" + i, new Task() {
@@ -155,8 +153,7 @@ class TaskExecutorTest {
 
   @Test
   void testMaxConcurrencyUnlimited() throws InterruptedException {
-    TaskExecutor unlimited = new TaskExecutor("unlimited", (t, e) -> {
-    }, meterRegistry);
+    TaskExecutor unlimited = new TaskExecutor("unlimited", meterRegistry);
 
     assertEquals(Integer.MAX_VALUE, unlimited.maxConcurrency());
     unlimited.close();
@@ -166,8 +163,7 @@ class TaskExecutorTest {
   @Test
   void testInvalidMaxConcurrency() {
     assertThrows(IllegalArgumentException.class, () -> {
-      new TaskExecutor("invalid", (t, e) -> {
-      }, 0, meterRegistry);
+      new TaskExecutor("invalid", 0, meterRegistry);
     });
   }
 

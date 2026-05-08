@@ -107,7 +107,7 @@ public class StateRequestHandler implements Task {
     this.s2cLog = s2cLog;
     this.concurrentStateModificationExceptionHandler = concurrentStateModificationExceptionHandler;
     this.taskExecutor = new TaskExecutor(contextProvider.ownerName(StateRequestHandler.class),
-        log.uncaughtExceptionLogger(), meterRegistry);
+        meterRegistry);
     this.guardedNodesDedups = guardedNodesDedups;
     this.s2cExactlyOnceOptions = s2cExactlyOnceOptions;
     initMetrics(contextProvider, meterRegistry);
@@ -245,7 +245,6 @@ public class StateRequestHandler implements Task {
     log.trace().log("Handling pending batched state requests");
     LogEntriesBatch.Builder commandsBatchBuilder = LogEntriesBatch.newBuilder();
     commands.forEach(c -> {
-
       RequestId requestId = RequestId.newBuilder()
           .setClientNodeIdentity(c.reqRes().request().getSourceNode())
           .setClientSequenceNumber(c.reqRes().request().getSequenceNumber())
@@ -256,8 +255,8 @@ public class StateRequestHandler implements Task {
           .setRequestId(requestId)
           .build();
       commandsBatchBuilder.addLogEntries(entryProto);
-
     });
+    
     try {
 
       long commitIndex = leaderState.getCommitIndex();

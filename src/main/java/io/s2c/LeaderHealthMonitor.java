@@ -2,13 +2,11 @@ package io.s2c;
 
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Predicate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.s2c.concurrency.Awaiter;
-import io.s2c.concurrency.Sequencer;
 import io.s2c.concurrency.Task;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
@@ -24,6 +22,7 @@ public class LeaderHealthMonitor implements Task {
   private final SynchronousQueue<Heartbeat> heartbeats = new SynchronousQueue<>();
 
   private final LeaderStateManager leaderStateManager;
+  private final NodeStateManager nodeStateManager;
   private final Awaiter<LeaderState, S2CStoppedException> leaderStateAwaiter;
   private final int maxMissedHeartbeats;
   private final int heartbeatTimeoutMs;
@@ -33,10 +32,12 @@ public class LeaderHealthMonitor implements Task {
   private int missedHeartbeats = 0;
 
   public LeaderHealthMonitor(LeaderStateManager leaderStateManager,
+      NodeStateManager nodeStateManager,
       int maxMissedHeartbeats,
       int heartbeatTimeoutMs,
       ContextProvider contextProvider) {
     this.leaderStateManager = leaderStateManager;
+    this.nodeStateManager = nodeStateManager;
     this.maxMissedHeartbeats = maxMissedHeartbeats;
     this.heartbeatTimeoutMs = heartbeatTimeoutMs;
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
@@ -53,6 +54,7 @@ public class LeaderHealthMonitor implements Task {
     while (running) {
       try {
         leaderStateAwaiter.await(ls -> !leaderStateManager.isLeader(ls));
+        nodeStateManager.awaitJoined();
         missedHeartbeats = 0;
         while (running) {
           var heartbeat = heartbeats.poll(heartbeatTimeoutMs, TimeUnit.MILLISECONDS);
@@ -67,7 +69,8 @@ public class LeaderHealthMonitor implements Task {
             if (missedHeartbeats >= maxMissedHeartbeats && running) {
               // Catch up leader state only, and re-follow
               leaderStateManager.resetLeaderState();
-              missedHeartbeats = 0;
+              // Break the loop, and re-enter when when the awaiter notifies a new leadership
+              break;
             }
           } else {
             int missed = missedHeartbeats;

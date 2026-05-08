@@ -90,7 +90,7 @@ public class S2CServer implements AutoCloseable {
     // S2CServer has no ContextProvider as it is group-independent
     this.log = new StructuredLogger(logger, LoggingContext.builder().build());
 
-    this.taskExecutor = new TaskExecutor("S2CServer", log.uncaughtExceptionLogger(), meterRegistry);
+    this.taskExecutor = new TaskExecutor("S2CServer", meterRegistry);
     this.s2cOptions = s2cOptions;
 
     initMetrics(meterRegistry);

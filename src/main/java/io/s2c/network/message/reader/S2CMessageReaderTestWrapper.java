@@ -57,10 +57,6 @@ class S2CMessageReaderTestWrapper implements S2CMessageReader {
       
       shouldFail = false;
 
-      if (message.hasHandshake() || message.hasFollowResponse()) {
-        return message;
-      }
-
       readingCounter++;
 
       
@@ -80,10 +76,10 @@ class S2CMessageReaderTestWrapper implements S2CMessageReader {
       failures.add(currentFailure);
       
       if (currentFailure == Failure.IO_EXCEPTION) {
-        logger.trace("Throwing IOException");
+        logger.atTrace().addKeyValue("message", message).log("Throwing IOException");
         throw new IOException();
       } else if (currentFailure == Failure.DROP) {
-        logger.trace("Dropping message");
+        logger.atTrace().addKeyValue("message", message).log("Dropping message");
         message = null;
       }
     }

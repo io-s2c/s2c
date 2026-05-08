@@ -23,15 +23,17 @@ public abstract class S2CStateMachine {
   private String s2cGroupId;
   private NodeIdentity nodeIdentity;
   private Supplier<Long> sequenceNumberSupplier;
+  private Supplier<Long> localApplyIndexSupplier;
   private SubmitFunction submitFunction;
-
+  
   final void init(String s2cGroupId, NodeIdentity nodeIdentity,
-      Supplier<Long> sequenceNumberSupplier, String name, SubmitFunction submitFunction) {
+      Supplier<Long> sequenceNumberSupplier, Supplier<Long> localApplyIndexSupplier, String name, SubmitFunction submitFunction) {
     this.s2cGroupId = s2cGroupId;
     this.nodeIdentity = nodeIdentity;
+    this.sequenceNumberSupplier = sequenceNumberSupplier;
+    this.localApplyIndexSupplier = localApplyIndexSupplier;
     this.submitFunction = submitFunction;
     this.name = name;
-    this.sequenceNumberSupplier = sequenceNumberSupplier;
   }
 
   protected final NodeIdentity nodeIdentity() {
@@ -86,7 +88,7 @@ public abstract class S2CStateMachine {
     S2CMessage res;
     res = submitFunction.submit(stateRequestBuilder.build());
     if (res.hasApplicationError()) {
-      throw new ApplicationException("Error while applying state request");
+      throw new ApplicationException(res.getApplicationError().getErrorMsg());
     }
     if (res.hasNotLeaderError() && !leaderCommand) {
       // non leader command should be retried and eventually redirected the leader.
@@ -143,6 +145,10 @@ public abstract class S2CStateMachine {
   protected void handleInvalidReadResponse() {
     throw new IllegalStateException(
         "StateRequestResponse for a READ request must have ApplicationResult");
+  }
+  
+  protected long localApplyIndex() {
+    return localApplyIndexSupplier.get();
   }
 
   private IllegalStateException fatal(Throwable e) {

@@ -22,7 +22,6 @@ import io.s2c.concurrency.Task;
 import io.s2c.concurrency.TaskExecutor;
 import io.s2c.configs.S2COptions;
 import io.s2c.error.ConnectTimeoutException;
-import io.s2c.error.LeadersInternalErrorException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.Follow;
@@ -86,9 +85,9 @@ public class NodeStateManager implements Task {
     this.logCleaner = logCleaner;
     this.s2cOptions = s2cOptions;
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
-    this.taskExecutor = new TaskExecutor("node-state-manager", log.uncaughtExceptionLogger(),
-        meterRegistry);
-    joinLatency = Timer.builder("s2c.node.join.latency").register(meterRegistry);
+    this.taskExecutor = new TaskExecutor("node-state-manager", meterRegistry);
+    joinLatency = Timer.builder("s2c.node.join.latency")
+        .register(meterRegistry);
   }
 
   public void awaitJoined() throws InterruptedException {
@@ -109,10 +108,22 @@ public class NodeStateManager implements Task {
     taskExecutor.close();
   }
 
+  private void closeQuietly() {
+    try {
+      close();
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted");
+    }
+  }
+
   @Override
   public void run() {
     try {
-
       while (running) {
         leaderStateAwaiter.await(l -> true);
         log.info()
@@ -124,27 +135,35 @@ public class NodeStateManager implements Task {
     catch (S2CStoppedException | InterruptedException | ReplayerBrokenException
         | ClientStoppedException e) {
       if (e instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
+        Thread.currentThread()
+            .interrupt();
       }
-      log.debug().setCause(e).log("Error in state loop");
+      log.debug()
+          .setCause(e)
+          .log("Error in state loop");
       try {
         close();
       }
       catch (InterruptedException e1) {
-        Thread.currentThread().interrupt();
-        log.debug().setCause(e1).log("Interrupted");
+        Thread.currentThread()
+            .interrupt();
+        log.debug()
+            .setCause(e1)
+            .log("Interrupted");
       }
     }
   }
 
   private String correlationId() {
-    return UUID.randomUUID().toString();
+    return UUID.randomUUID()
+        .toString();
   }
 
   private void handleLeader(LeaderState leaderState)
       throws InterruptedException, ReplayerBrokenException, S2CStoppedException {
     guardedLeaderStarting.write(v -> true);
-    log.info().log("Leader starting.");
+    log.info()
+        .log("Leader starting.");
 
     // Update leaderState after lock is acquired as ClientMessageHandler might have
     // acquired lock
@@ -174,7 +193,8 @@ public class NodeStateManager implements Task {
         // commitIndex
         leaderStateManager.firstCommitAsLeader(false);
       }
-      log.info().log("Finished starting.");
+      log.info()
+          .log("Finished starting.");
     }
     finally {
       guardedLeaderStarting.write(v -> false);
@@ -190,10 +210,6 @@ public class NodeStateManager implements Task {
 
       nodeState = NodeState.JOINING;
 
-      BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
-          .unlimited()
-          .build();
-
       AtomicReference<LeaderState> leaderState = new AtomicReference<>(
           leaderStateManager.getLeaderState());
 
@@ -203,35 +219,49 @@ public class NodeStateManager implements Task {
 
         if (joined) {
           handleLeader(leaderState.get());
-          log.info().log("Joined as leader");
+          log.info()
+              .log("Joined as leader");
 
         }
 
         if (!joined) {
-          log.info().log("Trying to join as a follower.");
+          log.info()
+              .log("Trying to join as a follower.");
           tooFarBehindGuardedValue.write(tooFarBehind -> {
             if (tooFarBehind) {
-              log.info().log("Node is too far behind leader state. Catching up");
+              log.info()
+                  .log("Node is too far behind leader state. Catching up");
               try {
                 try {
-                  rsm.catchUp(leaderState.get().getCommitIndex());
+                  rsm.catchUp(leaderState.get()
+                      .getCommitIndex());
                 }
                 catch (ReplayerBrokenException e) {
-                  log.debug().setCause(e).log("Error while catching up");
+                  log.debug()
+                      .setCause(e)
+                      .log("Error while catching up");
                   close();
                 }
               }
               catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.debug().setCause(e).log("Interrupted");
+                Thread.currentThread()
+                    .interrupt();
+                log.debug()
+                    .setCause(e)
+                    .log("Interrupted");
+                closeQuietly();
               }
 
             }
             return false;
           });
+          if (!running) {
+            return;
+          }
           joined = joinAsFollower(leaderState.get());
           if (joined) {
-            log.info().log("Joined as follower");
+            log.info()
+                .log("Joined as follower");
           }
         }
 
@@ -241,9 +271,6 @@ public class NodeStateManager implements Task {
           sample.stop(joinLatency);
           return;
         }
-
-        backoffCounter.enrich(log.debug()).log("Failed joining. Retrying");
-        backoffCounter.awaitNextAttempt();
         leaderState.set(leaderStateManager.checkLeaderState(leaderState.get()));
 
       }
@@ -261,48 +288,47 @@ public class NodeStateManager implements Task {
     BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
         .build();
 
-    BackoffCounter unlimitedBackoffCounter = BackoffCounter
-        .withRetryOptions(s2cOptions.s2cRetryOptions())
-        .unlimited()
-        .build();
-    
-    BackoffCounter selectedBackoffCounter = backoffCounter;
-    
     if (s2cClient.isReady()) {
       s2cClient.disconnect(); // Disconnect from last leader
     }
 
+    // Connect loop
     while (backoffCounter.canAttempt()) {
       try {
-        if (!s2cClient.isReady()) {
-          s2cClient.connect(leaderState.getNodeIdentity());
-          log.debug()
-              .addKeyValue("leaderNodeIdentity", leaderState.getNodeIdentity())
-              .log("Connected to leader.");
-        }
-        tryFollow();
-        return true;
+        s2cClient.connect(leaderState.getNodeIdentity());
+        log.debug()
+            .addKeyValue("leaderNodeIdentity", leaderState.getNodeIdentity())
+            .log("Connected to leader.");
+        break;
       }
       catch (UnknownHostException | ConnectTimeoutException | IOException
-          | ClientNotConnectedException | TimeoutException | LeadersInternalErrorException e) {
-        log.debug().setCause(e).log("Error while attempting to connect to current leader.");
-        if (e instanceof LeadersInternalErrorException) {
-          selectedBackoffCounter = unlimitedBackoffCounter;
-        } else {
-          selectedBackoffCounter = backoffCounter;
+          | ClientNotConnectedException e) {
+        log.debug()
+            .setCause(e)
+            .log("Error while attempting to connect to current leader.");
+        if (backoffCounter.canAttempt()) {
+          backoffCounter.enrich(log.debug())
+              .log("Retrying");
+          backoffCounter.awaitNextAttempt();
+          continue;
         }
+        backoffCounter.enrich(log.debug())
+            .log(
+                "Max attempts reached for connecting to current leader.. Checking leader state then retrying.");
+        return false;
       }
-      
-      if (selectedBackoffCounter.canAttempt()) {
-        selectedBackoffCounter.enrich(log.debug()).log("Retrying");
-        selectedBackoffCounter.awaitNextAttempt();
-        continue;
-      }
-      backoffCounter.enrich(log.debug())
-          .log(
-              "Max attempts reached for connecting to current leader.. Checking leader state then retrying.");
     }
-    return false;
+    // Follow loop
+    try {
+      tryFollow();
+      return true;
+    }
+    // ClientNotConnectedException should not happen as it is just connected and no other thread
+    // should disconnect
+    catch (ClientNotConnectedException | TimeoutException | IOException e) {
+      // Retries exhausted
+      return false;
+    }
   }
 
   private S2CMessage newFollowMessage() {
@@ -311,7 +337,10 @@ public class NodeStateManager implements Task {
         .setNodeIdentity(nodeIdentity)
         .setApplyIndex(rsm.applyIndex())
         .build();
-    return S2CMessage.newBuilder().setCorrelationId(correlationId()).setFollow(follow).build();
+    return S2CMessage.newBuilder()
+        .setCorrelationId(correlationId())
+        .setFollow(follow)
+        .build();
   }
 
   private S2CMessage sendFollow(S2CMessage message) throws ClientNotConnectedException,
@@ -320,28 +349,47 @@ public class NodeStateManager implements Task {
     BackoffCounter backoffCounter = BackoffCounter.withRetryOptions(s2cOptions.s2cRetryOptions())
         .build();
 
+    BackoffCounter unlimitedBackoffCounter = BackoffCounter
+        .withRetryOptions(s2cOptions.s2cRetryOptions())
+        .unlimited()
+        .build();
+
     S2CMessage res = null;
 
     while (true) {
       try {
         res = s2cClient.send(message, s2cOptions.requestTimeoutMs());
-        break;
+        if (res.hasInternalError() || res.hasLeaderStartingError()) {
+          log.debug()
+              .log("Leader responded with internal or starting error");
+          unlimitedBackoffCounter.enrich(log.debug())
+              .log("Retrying.");
+          unlimitedBackoffCounter.awaitNextAttempt();
+          continue;
+        } else if (!res.hasFollowResponse()) {
+          throw new IllegalStateException("Unexpected response: %s".formatted(res.toString()));
+        }
+        return res;
       }
+
       catch (TimeoutException | IOException e) {
-        log.debug().setCause(e).log("Error while sending follow request");
+        log.debug()
+            .setCause(e)
+            .log("Error while sending follow request");
         if (!backoffCounter.canAttempt()) {
           throw e;
         }
-      }
-      backoffCounter.enrich(log.debug()).log("Retrying.");
-      backoffCounter.awaitNextAttempt();
-    }
 
-    return res;
+        backoffCounter.enrich(log.debug())
+            .log("Retrying.");
+        backoffCounter.awaitNextAttempt();
+
+      }
+    }
   }
 
   private void tryFollow() throws InterruptedException, S2CStoppedException, ClientStoppedException,
-      ClientNotConnectedException, TimeoutException, IOException, LeadersInternalErrorException {
+      ClientNotConnectedException, TimeoutException, IOException {
 
     LeaderState leaderState = leaderStateManager.getLeaderState();
 
@@ -357,20 +405,17 @@ public class NodeStateManager implements Task {
     // change between request and response as the node won't do any
     // operations before receiving follow response.
     S2CMessage res = sendFollow(followMessage);
-    log.debug().addKeyValue("response", res::toString).log("Leader responded");
+    log.debug()
+        .addKeyValue("response", res::toString)
+        .log("Leader responded");
 
-    if (res != null && res.hasFollowResponse()) {
-      if (nodeSequenceNumber.get() == 0) {
-        nodeSequenceNumber.set(res.getFollowResponse().getNodeSequenceNumber());
-      }
-      log.debug().log("Node is follower.");
-    } else if (res != null && (res.hasInternalError() || res.hasLeaderStartingError())) {
-      throw new LeadersInternalErrorException();
-    } else {
-
-      // This should never happen
-      throw new IllegalStateException("Invalid response from leader");
+    if (nodeSequenceNumber.get() == 0) {
+      nodeSequenceNumber.set(res.getFollowResponse()
+          .getNodeSequenceNumber());
     }
+    log.debug()
+        .log("Node is follower.");
+
   }
 
   public long nextSequenceNumber() throws InterruptedException {

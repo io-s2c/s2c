@@ -48,7 +48,7 @@ public class SnapshottingWorker implements Task {
     this.snapshotUploadHandler = snapshotUploadHandler;
     this.log = new StructuredLogger(logger, contextProvider.loggingContext());
     this.singleTaskExecutor = new TaskExecutor(contextProvider.ownerName(SnapshottingWorker.class),
-        log.uncaughtExceptionLogger(), 1, meterRegistry);
+        1, meterRegistry);
   }
 
   public void init() {

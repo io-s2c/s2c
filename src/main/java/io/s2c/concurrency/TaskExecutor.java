@@ -1,6 +1,5 @@
 package io.s2c.concurrency;
 
-import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,24 +36,21 @@ public class TaskExecutor implements Executor, AutoCloseable {
   private final Logger logger = LoggerFactory.getLogger(TaskExecutor.class);
 
   public TaskExecutor(String owner,
-      UncaughtExceptionHandler uncaughtExceptionHandler,
       MeterRegistry meterRegistry) {
     // No limit if not specified
-    this(owner, uncaughtExceptionHandler, Integer.MAX_VALUE, meterRegistry);
+    this(owner, Integer.MAX_VALUE, meterRegistry);
   }
 
   public TaskExecutor(String owner,
-      UncaughtExceptionHandler uncaughtExceptionHandler,
       int maxConcurrency,
       MeterRegistry meterRegistry) {
     Objects.requireNonNull(owner);
-    Objects.requireNonNull(uncaughtExceptionHandler);
 
     if (maxConcurrency <= 0) {
       throw new IllegalArgumentException("maxConcurrency must be greater than zero");
     }
     executorService = Executors.newThreadPerTaskExecutor(
-        Thread.ofVirtual().uncaughtExceptionHandler(uncaughtExceptionHandler).factory());
+        Thread.ofVirtual().factory());
     this.owner = owner;
     this.maxConcurrency = maxConcurrency;
     if (maxConcurrency < Integer.MAX_VALUE) {

@@ -110,7 +110,7 @@ public class S2CClient implements AutoCloseable {
         dout = new DataOutputStream(s2cConnection.out());
         clientState(ClientState.CONNECTED);
         this.taskExecutor = new TaskExecutor(roleAwareName(clientRole),
-            log.uncaughtExceptionLogger(), meterRegistry);
+            meterRegistry);
         taskExecutor.start("drain-in", Task.of(this::drainIn));
         taskExecutor.start("drain-out", Task.of(this::drainOut, () -> out.put(POISON_PILL)));
         handshake();
