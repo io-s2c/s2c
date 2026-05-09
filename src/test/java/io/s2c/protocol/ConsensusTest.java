@@ -398,11 +398,12 @@ class ConsensusTest {
     }
     
     assertNull(err.get());
-    shutdownNode1();
 
     boolean node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
 
     assertFalse(node2IsLeader);
+    
+    shutdownNode1();
 
     int value2 = assertDoesNotThrow(() -> counterStateMachine2.get());
 
