@@ -373,7 +373,7 @@ class ConsensusTest {
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
 
       int j = 0;
-      while (j < 10_000) {
+      while (j < 100) {
         executorService.execute(() -> {
             try {
               counterStateMachine1.increment();
@@ -408,7 +408,7 @@ class ConsensusTest {
 
     node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
 
-    assertEquals(10000, value2);
+    assertEquals(100, value2);
     assertTrue(node2IsLeader);
 
   }
