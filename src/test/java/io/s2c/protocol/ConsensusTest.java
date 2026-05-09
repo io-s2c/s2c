@@ -367,26 +367,37 @@ class ConsensusTest {
   void testNodeCanStartWhenLeaderBusy() throws IOException, InterruptedException {
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
-
+    
+    AtomicReference<Exception> err = new AtomicReference<>();
+    
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
 
       int j = 0;
-      while (j < 100) {
+      while (j < 10_000) {
         executorService.execute(() -> {
-          assertDoesNotThrow(() -> {
-            counterStateMachine1.increment();
-          });
+            try {
+              counterStateMachine1.increment();
+            }
+            catch (ApplicationException | S2CNodeStoppedException | InterruptedException e) {
+              err.set(e);
+            }
+          
         });
         j++;
       }
 
       executorService.execute(() -> {
-        assertDoesNotThrow(
-            () -> initAndStartNode2(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
-                StateMachine.COUNTER));
+           try {
+            initAndStartNode2(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
+                  StateMachine.COUNTER);
+           }
+           catch (IOException | InterruptedException e) {
+             err.set(e);
+           }
       });
     }
-
+    
+    assertNull(err.get());
     shutdownNode1();
 
     boolean node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
@@ -397,7 +408,7 @@ class ConsensusTest {
 
     node2IsLeader = assertDoesNotThrow(() -> s2cNode2.isLeader());
 
-    assertEquals(100, value2);
+    assertEquals(10000, value2);
     assertTrue(node2IsLeader);
 
   }

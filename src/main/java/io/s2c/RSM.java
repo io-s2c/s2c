@@ -107,6 +107,10 @@ public class RSM {
       doApplyLogEntriesBatchQuietly(next);
     } else {
       // Order must be ensured by ClientMessageHandler
+      log.error()
+      .addKeyValue("commitIndex", next.getCommitIndex())
+      .addKeyValue("applyIndex", applyIndex).log("Batch out of sequence");
+      
       throw new IllegalStateException("Batch out of sequence");
     }
   }

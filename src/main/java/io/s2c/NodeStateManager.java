@@ -2,6 +2,7 @@ package io.s2c;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -65,7 +66,7 @@ public class NodeStateManager implements Task {
   private volatile NodeState nodeState = NodeState.JOINING;
 
   private final AtomicLong nodeSequenceNumber = new AtomicLong(0L);
-
+  
   public NodeStateManager(LeaderStateManager leaderStateManager,
       S2CClient s2cClient,
       ContextProvider contextProvider,
@@ -93,7 +94,7 @@ public class NodeStateManager implements Task {
   public void awaitJoined() throws InterruptedException {
     stateLock.lock();
     try {
-      while (!nodeState.equals(NodeState.JOINED) && running) {
+      while (nodeState != NodeState.JOINED && running) {
         stateCondition.await();
       }
     }

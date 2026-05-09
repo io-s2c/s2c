@@ -126,10 +126,22 @@ public class StateRequestSubmitter implements AutoCloseable {
           return response;
         }
       }
-      catch (IOException | ClientNotConnectedException | TimeoutException e) {
+      // Connection to the leader was lost and IOException was handled by S2CClient
+      catch (ClientNotConnectedException | IOException e) {
         log.debug()
             .setCause(e)
             .log("Error while sending.");
+        if (resetting.compareAndSet(false, true)) {
+          leaderStateManager.resetLeaderState();
+          resetting.set(false);
+        } else {
+          leaderStateManager.getLeaderState(); // Block while other thread is resetting
+        }
+      }
+      catch (TimeoutException e) {
+        log.debug()
+            .setCause(e)
+            .log("Timed out.");
         // Timeout might also mean the leader is active but busy, that's why we don't trigger
         // leadership check
         // and leave this to the LeaderHealthMonitor which will trigger a leadership reset if leader

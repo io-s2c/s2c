@@ -32,9 +32,10 @@ public class AsyncBatchApplier implements Task {
   private final RSM rsm;
 
   private final SynchronousQueue<Boolean> clearSynchronousQueue = new SynchronousQueue<>();
+  
   private volatile boolean running = false;
 
-  private long lastBatchCommitIndex = 0;
+  private volatile long lastBatchCommitIndex = 0;
 
   public AsyncBatchApplier(RSM rsm,
       LeaderStateManager leaderStateManager,
@@ -52,6 +53,7 @@ public class AsyncBatchApplier implements Task {
     while (true) {
       try {
         awaiter.await(l -> !leaderStateManager.isLeader(l));
+        lastBatchCommitIndex = 0;
         running = true;
         while (running) {
           var batch = pendingBatches.take();
@@ -65,10 +67,9 @@ public class AsyncBatchApplier implements Task {
             pendingBatches.clear();
             clearSynchronousQueue.put(false);
             running = false;
-            continue;
+            break;
           }
           rsm.applyLogEntriesBatchQuietly(batch);
-          pendingBatches.clear();
         }
       }
       catch (InterruptedException e) {
@@ -115,6 +116,14 @@ public class AsyncBatchApplier implements Task {
       pendingBatches.clear();
       pendingBatches.put(CLEAR);
       clearSynchronousQueue.take();
+    }
+  }
+  // Not synchronized because called by ClientMessageHandler in a single thread.
+  public long lastEnqeuedIndex() {
+    if (lastBatchCommitIndex == 0) {
+      return rsm.applyIndex();
+    } else {
+      return lastBatchCommitIndex;
     }
   }
 

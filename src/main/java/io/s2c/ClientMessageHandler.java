@@ -61,7 +61,6 @@ public class ClientMessageHandler {
   private final AtomicInteger concurrentFollowHandling = new AtomicInteger();
   private final AtomicInteger concurrentSynchronizeHandling = new AtomicInteger();
   private final AtomicInteger concurrentStateReqHandling = new AtomicInteger();
-  private final AtomicLong lastAcceptedCommitIndexForSynchronize = new AtomicLong();
   private final Function<NodeIdentity, Optional<Long>> clientSequenceNumberProvider;
 
   private Counter succeededStateRequests;
@@ -320,18 +319,18 @@ public class ClientMessageHandler {
               .getLogEntriesList()
               .isEmpty()) { // Just a heartbeat
                             // otherwise
-            if (synchronize.getCommitIndex() != lastAcceptedCommitIndexForSynchronize.get() + 1) {
+            if (synchronize.getCommitIndex() != asyncBatchApplier.lastEnqeuedIndex() + 1) {
               rejectedSynchRequestsIndexOutOfOrder.increment();
               log.debug()
                   .addKeyValue("correlationId", correlationId)
                   .addKeyValue("lastAcceptedCommitIndex",
-                      lastAcceptedCommitIndexForSynchronize.get())
+                      asyncBatchApplier.lastEnqeuedIndex())
                   .addKeyValue("requestCommitIndex",
                       synchronize.getBatch()
                           .getCommitIndex())
                   .log("Synchronize request cannot enqueued as commit index is out of order");
             } else {
-              long before = lastAcceptedCommitIndexForSynchronize.get();
+              long before = asyncBatchApplier.lastEnqeuedIndex();
               long lastAcceptedCommitIndex = asyncBatchApplier.apply(synchronize.getBatch());
               if (lastAcceptedCommitIndex > before) {
                 succeededSynchRequests.increment();
@@ -339,7 +338,6 @@ public class ClientMessageHandler {
                     .addKeyValue("correlationId", correlationId)
                     .addKeyValue("applyIndex", applyIndexSupplier.get())
                     .log("Synchronize request enqueued for handling");
-                lastAcceptedCommitIndexForSynchronize.set(lastAcceptedCommitIndex);
               } else {
                 log.trace()
                     .addKeyValue("correlationId", correlationId)
@@ -360,7 +358,7 @@ public class ClientMessageHandler {
     }
 
     var syncRes = SynchronizeResponse.newBuilder()
-        .setApplyIndex(lastAcceptedCommitIndexForSynchronize.get())
+        .setApplyIndex(asyncBatchApplier.lastEnqeuedIndex())
         .build();
     concurrentSynchronizeHandling.decrementAndGet();
     return S2CMessage.newBuilder()
