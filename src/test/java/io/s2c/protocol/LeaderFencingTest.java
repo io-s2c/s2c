@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -73,14 +75,16 @@ class LeaderFencingTest {
 
   private final AtomicLong applyIndex = new AtomicLong();
   private final AtomicLong applyIndex2 = new AtomicLong();
-  
+
   @Mock
   private S2CClient s2cClient;
 
   S3Facade s3Facade;
 
   Function<StructuredLogger, ObjectReader> objectReaderFactory = l -> new ObjectReader(s3Facade,
-      bucket, l, s2cOptions.s2cRetryOptions());
+      bucket,
+      l,
+      s2cOptions.s2cRetryOptions());
 
   @BeforeEach
   void setUp() throws UnsupportedOperationException, IOException, InterruptedException {
@@ -90,13 +94,29 @@ class LeaderFencingTest {
     s3Facade = TestUtil.createS3Facade(bucket);
 
     Function<StructuredLogger, ObjectWriter> objectWriterFactory = l -> new ObjectWriter(s3Facade,
-        bucket, l, s2cOptions.s2cRetryOptions());
+        bucket,
+        l,
+        s2cOptions.s2cRetryOptions());
 
-    leaderStateManager = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
-        s2cOptions, contextProvider, () -> s2cClient, applyIndex::get, l -> {}, meterRegistry);
+    leaderStateManager = new LeaderStateManager(objectReaderFactory,
+        objectWriterFactory,
+        s2cOptions,
+        contextProvider,
+        () -> s2cClient,
+        applyIndex::get,
+        l -> {
+        },
+        meterRegistry);
 
-    leaderStateManager2 = new LeaderStateManager(objectReaderFactory, objectWriterFactory,
-        s2cOptions, contextProvider2, () -> s2cClient, applyIndex2::get, l -> {}, meterRegistry);
+    leaderStateManager2 = new LeaderStateManager(objectReaderFactory,
+        objectWriterFactory,
+        s2cOptions,
+        contextProvider2,
+        () -> s2cClient,
+        applyIndex2::get,
+        l -> {
+        },
+        meterRegistry);
   }
 
   @Test
@@ -180,7 +200,9 @@ class LeaderFencingTest {
 
     assertEquals(leaderState.get(), leaderState2.get());
     // Only one attempt succeeded
-    assertEquals(1, leaderState.get().getEpoch());
+    assertEquals(1,
+        leaderState.get()
+            .getEpoch());
   }
 
   @Test
@@ -246,12 +268,13 @@ class LeaderFencingTest {
 
     // Make sure followers list is durable
 
-    assertDoesNotThrow(
-        () -> leaderStateManager.updateCommitIndex(leaderState.get().getCommitIndex()));
+    assertDoesNotThrow(() -> leaderStateManager.updateCommitIndex(leaderState.get()
+        .getCommitIndex()));
 
     CountDownLatch l = new CountDownLatch(1);
 
-    doThrow(IOException.class).when(s2cClient).connect(followerNodeIdentity);
+    doThrow(IOException.class).when(s2cClient)
+        .connect(followerNodeIdentity);
 
     CompletableFuture.runAsync(() -> {
 
@@ -265,7 +288,8 @@ class LeaderFencingTest {
         leaderState2.set(leaderStateManager2.checkLeaderState(leaderState2.get()));
         // Now we have the same etag, we know leadership attempt will be made
         leaderState2.set(leaderStateManager2.checkLeaderState(leaderState2.get()));
-      } catch (InterruptedException | S2CStoppedException e) {
+      }
+      catch (InterruptedException | S2CStoppedException e) {
         e.printStackTrace();
       }
       l.countDown();
@@ -281,7 +305,9 @@ class LeaderFencingTest {
 
     l.await();
 
-    assertEquals(2, leaderState.get().getEpoch());
+    assertEquals(2,
+        leaderState.get()
+            .getEpoch());
 
     assertTrue(leaderStateManager.isLeader(leaderState.get()));
 
@@ -293,7 +319,11 @@ class LeaderFencingTest {
 
   @Test
   void testAwaitLeaderChange() throws InterruptedException, S2CStoppedException {
-
+    
+    record FutureUnit(AtomicInteger c, CompletableFuture<?> f) {
+      
+    }
+    
     leaderStateManager.getLeaderState();
     AtomicInteger changesCount = new AtomicInteger();
     CountDownLatch l = new CountDownLatch(10);
@@ -310,33 +340,34 @@ class LeaderFencingTest {
         }
       });
     });
-
-    Map<AtomicInteger, CompletableFuture<?>> awaiting = new HashMap<>();
+    
+    List<FutureUnit> awaiting = new ArrayList<>();
     int i = 0;
     while (i < 10) {
       var awaiter = leaderStateManager.getNewAwaiter();
-      awaiting.compute(new AtomicInteger(), (k, v) -> {
-        return CompletableFuture.runAsync(() -> {
+      AtomicInteger c = new AtomicInteger();
+      awaiting.add(new FutureUnit(c, 
+        CompletableFuture.runAsync(() -> {
           l.countDown();
           while (true) {
             try {
               awaiter.await(ll -> true);
-              k.incrementAndGet();
+              c.incrementAndGet();
             } catch (InterruptedException | S2CStoppedException e) {
               break;
             }
           }
-        }, Executors.newVirtualThreadPerTaskExecutor());
-      });
+        }, Executors.newVirtualThreadPerTaskExecutor())
+      ));
       i++;
     }
     t.start();
     t.join();
     leaderStateManager.close();
-    for (var e : awaiting.entrySet()) {
-      e.getValue().join();
+    for (var e : awaiting) {
+      e.f.join();
       // 5 valid signal, and 1 WAKE_UP causes exception
-      assertEquals(5, e.getKey().get());
+      assertEquals(5, e.c().get());
     }
 
   }
@@ -360,7 +391,8 @@ class LeaderFencingTest {
           leaderStateManager2.getLeaderState();
           leaderStateManager.close();
           leaderStateManager2.close();
-        } catch (InterruptedException | S2CStoppedException e) {
+        }
+        catch (InterruptedException | S2CStoppedException e) {
 
         }
 
@@ -371,7 +403,8 @@ class LeaderFencingTest {
           LeaderState leaderState = leadershipAwaiter1.await(leaderStateManager::isLeader);
           boolean isLeader = leaderStateManager.isLeader(leaderState);
           assertTrue(isLeader);
-        } catch (InterruptedException | S2CStoppedException e) {
+        }
+        catch (InterruptedException | S2CStoppedException e) {
 
         }
       });
@@ -382,7 +415,8 @@ class LeaderFencingTest {
               .await(l -> !leaderStateManager.isLeader(l));
           boolean isLeader = leaderStateManager.isLeader(leaderState);
           assertFalse(isLeader);
-        } catch (InterruptedException | S2CStoppedException e) {
+        }
+        catch (InterruptedException | S2CStoppedException e) {
 
         }
 
@@ -393,7 +427,8 @@ class LeaderFencingTest {
           LeaderState leaderState = leadershipAwaiter2.await(leaderStateManager2::isLeader);
           boolean isLeader = leaderStateManager2.isLeader(leaderState);
           assertFalse(isLeader);
-        } catch (InterruptedException | S2CStoppedException e) {
+        }
+        catch (InterruptedException | S2CStoppedException e) {
         }
       });
 
@@ -403,7 +438,8 @@ class LeaderFencingTest {
               .await(l -> !leaderStateManager2.isLeader(l));
           boolean isLeader = leaderStateManager2.isLeader(leaderState);
           assertTrue(isLeader);
-        } catch (InterruptedException | S2CStoppedException e) {
+        }
+        catch (InterruptedException | S2CStoppedException e) {
 
         }
 
