@@ -2,7 +2,6 @@ package io.s2c;
 
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -16,7 +15,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.s2c.concurrency.GuardedValue;
-import io.s2c.error.ApplicationException;
 import io.s2c.error.ApplicationResultUnavailableException;
 import io.s2c.error.CommitException;
 import io.s2c.error.ConcurrentStateModificationException;
@@ -24,7 +22,6 @@ import io.s2c.error.RequestOutOfSequenceException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.error.StateRequestHandlingException;
 import io.s2c.logging.StructuredLogger;
-import io.s2c.model.messages.ApplicationError;
 import io.s2c.model.messages.ApplicationResult;
 import io.s2c.model.messages.ApplicationResultUnavailableError;
 import io.s2c.model.messages.Follow;
@@ -251,6 +248,9 @@ public class ClientMessageHandler {
               .setBody(result))
           .build());
       succeededStateRequests.increment();
+      if (stateRequest.getInternal() && result == RSM.INTERNAL_ERR) {
+        messageBuilder.setInternalError(InternalError.getDefaultInstance());
+      }
     }
     catch (StateRequestHandlingException e) {
       log.debug()
@@ -267,16 +267,6 @@ public class ClientMessageHandler {
         }
         messageBuilder.setNotLeaderError(NotLeaderError.getDefaultInstance());
       }
-      case ApplicationException ex -> {
-        if (stateRequest.getInternal()) {
-          messageBuilder.setInternalError(InternalError.getDefaultInstance());
-        } else {
-          failedStateRequests.increment();
-          messageBuilder.setApplicationError(ApplicationError.newBuilder()
-              .setErrorMsg(ex.getMessage())
-              .build());
-        }
-      }
       case ApplicationResultUnavailableException ex -> {
         messageBuilder.setStateRequestResponse(StateRequestResponse.newBuilder()
             .setApplicationResultUnavailableError(
@@ -286,9 +276,6 @@ public class ClientMessageHandler {
       }
     }
     catch (RequestOutOfSequenceException e) {
-      if (stateRequest.getSequenceNumber() == 1) {
-        log.info();
-      }
       messageBuilder.setRequestOutOfSequenceError(RequestOutOfSequenceError.newBuilder()
           .setNextSeqNum(e.nextSeqNum()));
     }

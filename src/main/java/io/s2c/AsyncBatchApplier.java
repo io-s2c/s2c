@@ -108,7 +108,7 @@ public class AsyncBatchApplier implements Task {
           .log("Error while appending batch");
       close();
     }
-    return lastBatchCommitIndex;
+    return lastEnqeuedIndex();
   }
 
   public void clear() throws InterruptedException {

@@ -40,7 +40,6 @@ import io.s2c.S2CNode;
 import io.s2c.TestUtil;
 import io.s2c.configs.S2COptions;
 import io.s2c.configs.S2CRetryOptions;
-import io.s2c.error.ApplicationException;
 import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.model.messages.S2CMessage;
@@ -260,7 +259,7 @@ class ConsensusTest {
 
   @Test
   void testLogOrderingWithConcurrentCommandsTwoNodesTwoSMs()
-      throws ApplicationException, S2CNodeStoppedException {
+      throws  S2CNodeStoppedException {
 
     try (ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor()) {
 
@@ -378,7 +377,7 @@ class ConsensusTest {
             try {
               counterStateMachine1.increment();
             }
-            catch (ApplicationException | S2CNodeStoppedException | InterruptedException e) {
+            catch (S2CNodeStoppedException | InterruptedException e) {
               err.set(e);
             }
           
@@ -474,7 +473,7 @@ class ConsensusTest {
         try {
           counterStateMachine1.increment();
         }
-        catch (ApplicationException | S2CNodeStoppedException e) {
+        catch (S2CNodeStoppedException e) {
           cause.set(e);
         }
         catch (InterruptedException e) {
@@ -529,7 +528,7 @@ class ConsensusTest {
           counterStateMachine2.increment();
 
         }
-        catch (ApplicationException | S2CNodeStoppedException e) {
+        catch (S2CNodeStoppedException e) {
           cause.set(e);
         }
         catch (InterruptedException e) {
@@ -585,7 +584,7 @@ class ConsensusTest {
           try {
             counterStateMachine2.increment();
           }
-          catch (ApplicationException | S2CNodeStoppedException e) {
+          catch (S2CNodeStoppedException e) {
             cause.set(e);
           }
           catch (InterruptedException e) {
@@ -677,7 +676,7 @@ class ConsensusTest {
                 node2BecameLeaderLatch.countDown();
               }
             }
-            catch (ApplicationException | S2CNodeStoppedException | S2CStoppedException
+            catch (S2CNodeStoppedException | S2CStoppedException
                 | InterruptedException e) {
               cause.set(e);
             }
@@ -723,7 +722,7 @@ class ConsensusTest {
           Thread.currentThread()
               .interrupt();
         }
-        catch (ApplicationException | S2CNodeStoppedException e) {
+        catch (S2CNodeStoppedException e) {
           cause.set(e);
 
         }
@@ -848,7 +847,7 @@ class ConsensusTest {
 
   @Test
   void testSnapshotting() throws IOException, InterruptedException, S2CStoppedException,
-      ApplicationException, S2CNodeStoppedException {
+       S2CNodeStoppedException {
 
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.COUNTER);
@@ -915,7 +914,7 @@ class ConsensusTest {
 
   @Test
   void testFaultInjectedSyncrhonizationKeepsOrdering() throws IOException, InterruptedException,
-      S2CStoppedException, ApplicationException, S2CNodeStoppedException {
+      S2CStoppedException,  S2CNodeStoppedException {
 
     initAndStartNode1(newS2CMessageReaderFactory(s2cOptions.maxMessageSize()),
         StateMachine.APPENDER);
@@ -971,7 +970,7 @@ class ConsensusTest {
 
   @Test
   void testSynchronizationOfTooFarBehindFollower()
-      throws IOException, InterruptedException, ApplicationException, S2CNodeStoppedException {
+      throws IOException, InterruptedException,  S2CNodeStoppedException {
 
     // Disable caching so that no truncated entry can be found in cache
     int logLruCacheSize = s2cOptions.logLruCacheSize();

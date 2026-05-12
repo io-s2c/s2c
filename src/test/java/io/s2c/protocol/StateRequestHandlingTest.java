@@ -110,7 +110,6 @@ class StateRequestHandlingTest {
             LastResult newLastResult = LastResult.newBuilder()
                 .setLastSeqNum(r.reqRes().request().getSequenceNumber())
                 .setResult(result)
-                .setErrMsg(RSM.NO_ERR_MSG)
                 .build();
 
             guardedDedupUnits.write(dedupUnits -> {

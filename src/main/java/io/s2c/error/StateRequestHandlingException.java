@@ -1,6 +1,6 @@
 package io.s2c.error;
 
-public abstract sealed class StateRequestHandlingException extends Exception permits CommitException, ApplicationException, ApplicationResultUnavailableException {
+public abstract sealed class StateRequestHandlingException extends Exception permits CommitException, ApplicationResultUnavailableException {
 
   private static final long serialVersionUID = -7954114691568924283L;
 

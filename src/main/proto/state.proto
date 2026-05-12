@@ -17,9 +17,8 @@ message StateSnapshot {
 
 message LastResult {
 	bytes result = 1;
-	string err_msg = 2;
-	uint64 last_seq_num = 3;
-	NodeIdentity node_identity = 4;
+	uint64 last_seq_num = 2;
+	NodeIdentity node_identity = 3;
 }
 
 message StateMachineSnapshot {

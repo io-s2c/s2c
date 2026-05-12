@@ -26,11 +26,10 @@ message S2CMessage {
   oneof error {
     NotLeaderError not_leader_error = 10;
     LeaderStartingError leader_starting_error = 11;
-    ApplicationError application_error = 12;
-    NotFollowerError not_follower_error = 13;
-    SlowDownError slow_down_error = 14;
-    InternalError internal_error = 15;
-    RequestOutOfSequenceError request_out_of_sequence_error = 16;
+    NotFollowerError not_follower_error = 12;
+    SlowDownError slow_down_error = 13;
+    InternalError internal_error = 14;
+    RequestOutOfSequenceError request_out_of_sequence_error = 15;
   }
 }
 
@@ -99,10 +98,6 @@ message SynchronizeRequest {
   uint64 commit_index = 2;
   string group_id = 3;
   FollowerTooFarBehindError follower_too_far_behind_error = 4;
-}
-
-message ApplicationError {
-  string error_msg = 1;
 }
 
 message InternalError {

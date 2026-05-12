@@ -26,7 +26,6 @@ import io.s2c.concurrency.RequestResponseTask;
 import io.s2c.concurrency.Task;
 import io.s2c.concurrency.TaskExecutor;
 import io.s2c.configs.S2CExactlyOnceOptions;
-import io.s2c.error.ApplicationException;
 import io.s2c.error.ApplicationResultUnavailableException;
 import io.s2c.error.ConcurrentStateModificationException;
 import io.s2c.error.NotLeaderException;
@@ -86,7 +85,6 @@ public class StateRequestHandler implements Task {
 
   private final S2CExactlyOnceOptions s2cExactlyOnceOptions;
 
-
   public StateRequestHandler(ContextProvider contextProvider,
       int flushIntervalMs,
       int batchMinCount,
@@ -136,43 +134,58 @@ public class StateRequestHandler implements Task {
       AtomicLong nextSeqNum = new AtomicLong();
 
       guardedNodesDedups.write(dedupUnits -> {
-        DedupUnit dedupUnit = dedupUnits.get(req.reqRes().request().getSourceNode());
+        DedupUnit dedupUnit = dedupUnits.get(req.reqRes()
+            .request()
+            .getSourceNode());
         if (dedupUnit != null) {
           if (dedupUnit.eosBuffer() == null) {
             dedupUnit = new DedupUnit(dedupUnit.lastResult(),
-                newEOSBuffer(dedupUnit.lastResult().getLastSeqNum() + 1));
-            dedupUnits.put(req.reqRes().request().getSourceNode(), dedupUnit);
+                newEOSBuffer(dedupUnit.lastResult()
+                    .getLastSeqNum() + 1));
+            dedupUnits.put(req.reqRes()
+                .request()
+                .getSourceNode(), dedupUnit);
           }
-          if (req.reqRes().request().getSequenceNumber() == dedupUnit.lastResult()
-              .getLastSeqNum()) {
-            if (!dedupUnit.lastResult().getErrMsg().equals(RSM.NO_ERR_MSG)) {
-              req.reqRes().exception(new ApplicationException(dedupUnit.lastResult().getErrMsg()));
-            } else {
-              req.reqRes().response(dedupUnit.lastResult().getResult());
-            }
-          } else if (req.reqRes().request().getSequenceNumber() < dedupUnit.lastResult()
-              .getLastSeqNum()) {
-            req.reqRes().exception(new ApplicationResultUnavailableException());
+          if (req.reqRes()
+              .request()
+              .getSequenceNumber() == dedupUnit.lastResult()
+                  .getLastSeqNum()) {
+            req.reqRes()
+                .response(dedupUnit.lastResult()
+                    .getResult());
+          } else if (req.reqRes()
+              .request()
+              .getSequenceNumber() < dedupUnit.lastResult()
+                  .getLastSeqNum()) {
+            req.reqRes()
+                .exception(new ApplicationResultUnavailableException());
           } else {
-            added.set(dedupUnit.eosBuffer().add(req));
+            added.set(dedupUnit.eosBuffer()
+                .add(req));
             if (!added.get()) {
               outOfSeq.set(true);
-              nextSeqNum.set(dedupUnit.eosBuffer().minSequenceNumber());
+              nextSeqNum.set(dedupUnit.eosBuffer()
+                  .minSequenceNumber());
             }
           }
         } else {
           // First request from a client must have seqNum=1
           var lastResult = LastResult.newBuilder()
-              .setNodeIdentity(req.reqRes().request().getSourceNode())
+              .setNodeIdentity(req.reqRes()
+                  .request()
+                  .getSourceNode())
               .setLastSeqNum(0)
               .build();
           var queue = newEOSBuffer(1L);
           dedupUnit = new DedupUnit(lastResult, queue);
-          dedupUnits.put(req.reqRes().request().getSourceNode(), dedupUnit);
+          dedupUnits.put(req.reqRes()
+              .request()
+              .getSourceNode(), dedupUnit);
           added.set(queue.add(req));
           if (!added.get()) {
             outOfSeq.set(true);
-            nextSeqNum.set(dedupUnit.eosBuffer().minSequenceNumber());
+            nextSeqNum.set(dedupUnit.eosBuffer()
+                .minSequenceNumber());
           } else {
             accepted.set(true);
           }
@@ -210,15 +223,19 @@ public class StateRequestHandler implements Task {
         Task.of(() -> startBatchingLoop(commandsQueue, this::handleCommands),
             () -> commandsQueue.put(POISON_PILL)));
 
-    taskExecutor.start("reads-handler", Task.of(
-        () -> startBatchingLoop(readsQueue, this::handleReads), () -> readsQueue.put(POISON_PILL)));
+    taskExecutor.start("reads-handler",
+        Task.of(() -> startBatchingLoop(readsQueue, this::handleReads),
+            () -> readsQueue.put(POISON_PILL)));
 
     try {
       taskExecutor.join();
     }
     catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Interrupted");
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Interrupted");
       closeQuietly();
     }
 
@@ -229,8 +246,11 @@ public class StateRequestHandler implements Task {
       close();
     }
     catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug().setCause(e).log("Error while closing");
+      Thread.currentThread()
+          .interrupt();
+      log.debug()
+          .setCause(e)
+          .log("Error while closing");
     }
   }
 
@@ -238,25 +258,35 @@ public class StateRequestHandler implements Task {
       throws InterruptedException, S2CStoppedException {
     LeaderState leaderState = leaderStateManager.getLeaderState();
     if (!leaderStateManager.isLeader(leaderState)) {
-      log.debug().log("Cannot flush batch as node is not leader.");
+      log.debug()
+          .log("Cannot flush batch as node is not leader.");
       commands.forEach(t -> t.reqRes.exception(new NotLeaderException(leaderState)));
       return;
     }
-    log.trace().log("Handling pending batched state requests");
+    log.trace()
+        .log("Handling pending batched state requests");
     LogEntriesBatch.Builder commandsBatchBuilder = LogEntriesBatch.newBuilder();
     commands.forEach(c -> {
       RequestId requestId = RequestId.newBuilder()
-          .setClientNodeIdentity(c.reqRes().request().getSourceNode())
-          .setClientSequenceNumber(c.reqRes().request().getSequenceNumber())
+          .setClientNodeIdentity(c.reqRes()
+              .request()
+              .getSourceNode())
+          .setClientSequenceNumber(c.reqRes()
+              .request()
+              .getSequenceNumber())
           .build();
       LogEntry entryProto = LogEntry.newBuilder()
-          .setBody(c.reqRes().request().getBody())
-          .setSourceSm(c.reqRes().request().getSourceSm())
+          .setBody(c.reqRes()
+              .request()
+              .getBody())
+          .setSourceSm(c.reqRes()
+              .request()
+              .getSourceSm())
           .setRequestId(requestId)
           .build();
       commandsBatchBuilder.addLogEntries(entryProto);
     });
-    
+
     try {
 
       long commitIndex = leaderState.getCommitIndex();
@@ -266,8 +296,8 @@ public class StateRequestHandler implements Task {
         if (leaderStateManager.firstCommitAsLeader()) {
 
           try {
-            s2cLog.append(commandsBatchBuilder.setCommitIndex(commitIndex).build(), commitIndex,
-                leaderState);
+            s2cLog.append(commandsBatchBuilder.setCommitIndex(commitIndex)
+                .build(), commitIndex, leaderState);
             committedBatches.increment();
             committed = true;
             leaderStateManager.firstCommitAsLeader(false);
@@ -279,8 +309,8 @@ public class StateRequestHandler implements Task {
         if (!committed) {
           commitIndex++;
           leaderStateManager.updateCommitIndex(commitIndex);
-          s2cLog.append(commandsBatchBuilder.setCommitIndex(commitIndex).build(), commitIndex,
-              leaderState);
+          s2cLog.append(commandsBatchBuilder.setCommitIndex(commitIndex)
+              .build(), commitIndex, leaderState);
           committedBatches.increment();
         }
         log.trace()
@@ -292,10 +322,13 @@ public class StateRequestHandler implements Task {
         long applyIndex = batchApplier
             .apply(new CommittedBatch(commands, StateRequestType.COMMAND, commitIndex));
 
-        if (applyIndex != leaderStateManager.getLeaderState().getCommitIndex()) {
+        if (applyIndex != leaderStateManager.getLeaderState()
+            .getCommitIndex()) {
           throw new IllegalStateException(
-              "applyIndex (%d) and commitIndex (%d) don't match after commit applied"
-                  .formatted(applyIndex, leaderStateManager.getLeaderState().getCommitIndex()));
+              "applyIndex (%d) and commitIndex (%d) don't match after commit applied".formatted(
+                  applyIndex,
+                  leaderStateManager.getLeaderState()
+                      .getCommitIndex()));
         }
         sample.stop(applicationLatencyCommand);
         // Asynchronously synch to followers
@@ -309,7 +342,8 @@ public class StateRequestHandler implements Task {
     catch (ConcurrentStateModificationException e) {
 
       commands.forEach(c -> {
-        c.reqRes().exception(e);
+        c.reqRes()
+            .exception(e);
       });
       concurrentStateModificationExceptionHandler.accept(e);
 
@@ -319,7 +353,8 @@ public class StateRequestHandler implements Task {
         dedupUnits.applyOnIterator(it -> {
           while (it.hasNext()) {
             var next = it.next();
-            next.getValue().resetBuffer();
+            next.getValue()
+                .resetBuffer();
           }
         });
 
@@ -335,14 +370,16 @@ public class StateRequestHandler implements Task {
 
   private void handleReads(List<TraceableStateRequest> reads)
       throws InterruptedException, S2CStoppedException {
-    
+
     List<TraceableStateRequest> copyReads = reads.stream()
         .map(r -> new TraceableStateRequest(r.correlationId(),
-            new RequestResponseTask<>(r.reqRes().request())))
+            new RequestResponseTask<>(r.reqRes()
+                .request())))
         .toList();
     LeaderState leaderState = leaderStateManager.getLeaderState();
     if (!leaderStateManager.isLeader(leaderState)) {
-      log.debug().log("Cannot flush batch as node is not leader.");
+      log.debug()
+          .log("Cannot flush batch as node is not leader.");
       reads.forEach(t -> t.reqRes.exception(new NotLeaderException(leaderState)));
       return;
     }
@@ -362,16 +399,23 @@ public class StateRequestHandler implements Task {
           }));
       copyReads.forEach(req -> {
         var originalRead = readsMap.get(req.correlationId());
-        if (req.reqRes().excption() != null) {
-          originalRead.reqRes().exception(req.reqRes().excption());
+        if (req.reqRes()
+            .excption() != null) {
+          originalRead.reqRes()
+              .exception(req.reqRes()
+                  .excption());
         } else {
-          originalRead.reqRes().response(req.reqRes().response());
+          originalRead.reqRes()
+              .response(req.reqRes()
+                  .response());
         }
       });
-      log.trace().log("Batch of read requests applied.");
+      log.trace()
+          .log("Batch of read requests applied.");
     }
     catch (ConcurrentStateModificationException e) {
-      reads.forEach(r -> r.reqRes().exception(e));
+      reads.forEach(r -> r.reqRes()
+          .exception(e));
       concurrentStateModificationExceptionHandler.accept(e);
     }
     finally {
@@ -460,9 +504,12 @@ public class StateRequestHandler implements Task {
           }
         }
         catch (InterruptedException | S2CStoppedException e) {
-          log.debug().setCause(e).log("Error while handling batch");
+          log.debug()
+              .setCause(e)
+              .log("Error while handling batch");
           if (e instanceof InterruptedException) {
-            Thread.currentThread().interrupt();
+            Thread.currentThread()
+                .interrupt();
           }
           closeQuietly();
           return;
@@ -477,7 +524,8 @@ public class StateRequestHandler implements Task {
         commandsQueue.put(r);
       }
       catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
+        Thread.currentThread()
+            .interrupt();
       }
     }, s2cExactlyOnceOptions.outOfSeqBufferSize(), taskExecutor);
   }

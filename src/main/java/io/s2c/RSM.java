@@ -15,7 +15,6 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import io.s2c.LogReplayer.ReplayerBrokenException;
 import io.s2c.StateRequestHandler.TraceableStateRequest;
 import io.s2c.concurrency.GuardedValue;
-import io.s2c.error.ApplicationException;
 import io.s2c.error.S2CStoppedException;
 import io.s2c.logging.StructuredLogger;
 import io.s2c.model.messages.InternalStateRequest;
@@ -30,8 +29,8 @@ import io.s2c.util.InterruptableSupplier;
 import io.s2c.util.LRUCache;
 
 public class RSM {
-
-  public static final String NO_ERR_MSG = "No_S2C_Err_Msg";
+  // Used locally only
+  public static final ByteString INTERNAL_ERR = ByteString.copyFromUtf8("INTERNAL_ERR");
 
   private final Logger logger = LoggerFactory.getLogger(RSM.class);
   private final StructuredLogger log;
@@ -108,9 +107,10 @@ public class RSM {
     } else {
       // Order must be ensured by ClientMessageHandler
       log.error()
-      .addKeyValue("commitIndex", next.getCommitIndex())
-      .addKeyValue("applyIndex", applyIndex).log("Batch out of sequence");
-      
+          .addKeyValue("commitIndex", next.getCommitIndex())
+          .addKeyValue("applyIndex", applyIndex)
+          .log("Batch out of sequence");
+
       throw new IllegalStateException("Batch out of sequence");
     }
   }
@@ -123,22 +123,13 @@ public class RSM {
 
     for (LogEntry entry : next.getLogEntriesList()) {
       LastResult.Builder lastResultBuilder = LastResult.newBuilder();
-      try {
-        ByteString result = apply("",
-            entry.getSourceSm(),
-            entry.getBody(),
-            StateRequestType.COMMAND,
-            entry.getInternal());
-        lastResultBuilder.setResult(result);
-        lastResultBuilder.setErrMsg(NO_ERR_MSG);
-      }
-      catch (ApplicationException e) {
-        log.debug()
-            .setCause(e)
-            .log("Error while applying");
-        lastResultBuilder.setResult(ByteString.EMPTY);
-        lastResultBuilder.setErrMsg(e.getMessage());
-      }
+
+      ByteString result = apply("",
+          entry.getSourceSm(),
+          entry.getBody(),
+          StateRequestType.COMMAND,
+          entry.getInternal());
+      lastResultBuilder.setResult(result);
 
       LastResult newLastResult = lastResultBuilder.setNodeIdentity(entry.getRequestId()
           .getClientNodeIdentity())
@@ -275,7 +266,7 @@ public class RSM {
     }
   }
 
-  private ByteString applyInternal(ByteString body) throws ApplicationException {
+  private ByteString applyInternal(ByteString body) {
     try {
       InternalStateRequest internalStateRequest = InternalStateRequest.parseFrom(body);
 
@@ -289,49 +280,32 @@ public class RSM {
         Thread.currentThread()
             .interrupt();
       }
-      // Will be translated to InternalError by ClientMessageHandler
-      String msg = "Error while handling internal state request";
-      log.debug()
-          .setCause(e)
-          .log(msg);
-      throw new ApplicationException(msg);
+      return INTERNAL_ERR;
     }
   }
 
   private void doApplyBatch(Collection<TraceableStateRequest> batch) {
     for (var t : batch) {
-      try {
-        ByteString result = apply(t.correlationId(),
-            t.reqRes()
-                .request()
-                .getSourceSm(),
-            t.reqRes()
-                .request()
-                .getBody(),
-            t.reqRes()
-                .request()
-                .getType(),
-            t.reqRes()
-                .request()
-                .getInternal());
-        log.trace()
-            .addKeyValue("correlationId", t.correlationId())
-            .log("Request applied");
-        t.reqRes()
-            .response(result);
-      }
-      catch (ApplicationException e) {
-        log.debug()
-            .setCause(e)
-            .addKeyValue("correlationId", t.correlationId())
-            .addKeyValue("internal",
-                t.reqRes()
-                    .request()
-                    .getInternal())
-            .log("Error while applying request");
-        t.reqRes()
-            .exception(e);
-      }
+
+      ByteString result = apply(t.correlationId(),
+          t.reqRes()
+              .request()
+              .getSourceSm(),
+          t.reqRes()
+              .request()
+              .getBody(),
+          t.reqRes()
+              .request()
+              .getType(),
+          t.reqRes()
+              .request()
+              .getInternal());
+
+      log.trace()
+          .addKeyValue("correlationId", t.correlationId())
+          .log("Request applied");
+      t.reqRes()
+          .response(result);
 
       if (t.reqRes()
           .request()
@@ -343,18 +317,9 @@ public class RSM {
             .getSourceNode())
             .setLastSeqNum(t.reqRes()
                 .request()
-                .getSequenceNumber());
-        if (t.reqRes()
-            .excption() != null) {
-          lastResultBuilder.setErrMsg(t.reqRes()
-              .excption()
-              .getMessage());
-          lastResultBuilder.setResult(ByteString.EMPTY);
-        } else {
-          lastResultBuilder.setResult(t.reqRes()
-              .response());
-          lastResultBuilder.setErrMsg(NO_ERR_MSG);
-        }
+                .getSequenceNumber())
+            .setResult(t.reqRes()
+                .response());
 
         LastResult newLastResult = lastResultBuilder.build();
 
@@ -381,7 +346,7 @@ public class RSM {
   }
 
   private ByteString apply(String correlationId, String stateMachineName, ByteString requestBody,
-      StateRequestType stateRequestType, boolean internal) throws ApplicationException {
+      StateRequestType stateRequestType, boolean internal) {
     S2CStateMachine stateMachine = s2cStateMachineRegistry.get(stateMachineName);
     if (stateMachine == null) {
       // This should never happen, as state machine creation must be made
@@ -402,7 +367,6 @@ public class RSM {
 
       return stateMachine.handleRequest(requestBody, stateRequestType);
     }
-
   }
 
   private Optional<StateSnapshot> restoreSnapshot() throws InterruptedException {

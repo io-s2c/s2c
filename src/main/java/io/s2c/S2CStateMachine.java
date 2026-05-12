@@ -5,7 +5,6 @@ import java.util.function.Supplier;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 
-import io.s2c.error.ApplicationException;
 import io.s2c.error.OperationNotPermittedException;
 import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.model.messages.InternalStateRequest;
@@ -66,7 +65,7 @@ public abstract class S2CStateMachine {
 
   private final S2CMessage sendToLeader(ByteString body, StateRequestType requestType,
       boolean internal, boolean leaderCommand)
-      throws ApplicationException, S2CNodeStoppedException, InterruptedException {
+      throws S2CNodeStoppedException, InterruptedException {
     if (submitFunction == null || name == null) {
       throw new IllegalStateException(
           "ClientState machine is not initialized.. Did you use S2CNode::createAndRegisterStateMachine()?");
@@ -87,9 +86,6 @@ public abstract class S2CStateMachine {
 
     S2CMessage res;
     res = submitFunction.submit(stateRequestBuilder.build());
-    if (res.hasApplicationError()) {
-      throw new ApplicationException(res.getApplicationError().getErrorMsg());
-    }
     if (res.hasNotLeaderError() && !leaderCommand) {
       // non leader command should be retried and eventually redirected the leader.
       throw new IllegalStateException("Unexpected response");
@@ -111,7 +107,7 @@ public abstract class S2CStateMachine {
    * command is committed, it will be applied by all nodes.
    */
   protected final StateRequestResponse executeLeaderCommand(ByteString command)
-      throws ApplicationException, S2CNodeStoppedException, InterruptedException,
+      throws S2CNodeStoppedException, InterruptedException,
       OperationNotPermittedException {
     S2CMessage res = sendToLeader(command, StateRequestType.COMMAND, false, true);
     if (res.hasNotLeaderError()) {
@@ -121,7 +117,7 @@ public abstract class S2CStateMachine {
   }
 
   protected final StateRequestResponse sendToLeader(ByteString body, StateRequestType requestType)
-      throws ApplicationException, S2CNodeStoppedException, InterruptedException {
+      throws S2CNodeStoppedException, InterruptedException {
     return sendToLeader(body, requestType, false, false).getStateRequestResponse();
 
   }
@@ -134,19 +130,8 @@ public abstract class S2CStateMachine {
     return this.name;
   }
 
-  protected abstract ByteString handleRequest(ByteString request, StateRequestType requestType)
-      throws ApplicationException;
+  protected abstract ByteString handleRequest(ByteString request, StateRequestType requestType);
 
-  protected void handleInvalidCommandResponse() {
-    throw new IllegalStateException(
-        "StateRequestResponse for a COMMAND has neither ApplicationResult nor ApplicationResultUnavailableError");
-  }
-
-  protected void handleInvalidReadResponse() {
-    throw new IllegalStateException(
-        "StateRequestResponse for a READ request must have ApplicationResult");
-  }
-  
   protected long localApplyIndex() {
     return localApplyIndexSupplier.get();
   }
@@ -158,18 +143,12 @@ public abstract class S2CStateMachine {
   private ByteString sendInternal(InternalStateRequest internalStateRequest,
       StateRequestType stateRequestType) throws S2CNodeStoppedException, InterruptedException {
 
-    try {
       StateRequestResponse response = sendToLeader(internalStateRequest.toByteString(),
           stateRequestType,
           true,
           false).getStateRequestResponse();
       return response.getApplicationResult()
           .getBody();
-    }
-    // ApplicationException can never be thrown for internal requests because it is translated to
-    // InternalError and is retried by StateRequestSubmitter
-    catch (ApplicationException e) {
-      throw fatal(e);
-    }
+    
   }
 }

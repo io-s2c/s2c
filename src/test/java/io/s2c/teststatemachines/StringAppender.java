@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import com.google.protobuf.ByteString;
 
 import io.s2c.S2CStateMachine;
-import io.s2c.error.ApplicationException;
 import io.s2c.error.S2CNodeStoppedException;
 import io.s2c.model.messages.StateRequest.StateRequestType;
 import io.s2c.model.messages.StateRequestResponse;
@@ -13,7 +12,7 @@ import io.s2c.model.messages.StateRequestResponse;
 public class StringAppender extends S2CStateMachine {
 
   private final StringBuilder stringBuilder = new StringBuilder();
-  
+
   @Override
   public ByteString snapshot() {
     return ByteString.copyFromUtf8(stringBuilder.toString());
@@ -28,10 +27,9 @@ public class StringAppender extends S2CStateMachine {
   }
 
   @Override
-  protected ByteString handleRequest(ByteString request, StateRequestType requestType)
-      throws ApplicationException {
+  protected ByteString handleRequest(ByteString request, StateRequestType requestType) {
     if (requestType == StateRequestType.COMMAND) {
-      String str = new String (request.toByteArray(), StandardCharsets.UTF_8);
+      String str = new String(request.toByteArray(), StandardCharsets.UTF_8);
       stringBuilder.append(str);
       return ByteString.copyFromUtf8(stringBuilder.toString());
     } else {
@@ -40,21 +38,17 @@ public class StringAppender extends S2CStateMachine {
 
   }
 
-  public void append(String str) throws ApplicationException, S2CNodeStoppedException, InterruptedException {
+  public void append(String str) throws S2CNodeStoppedException, InterruptedException {
     var byteStr = ByteString.copyFrom(str.getBytes(StandardCharsets.UTF_8));
     sendToLeader(byteStr, StateRequestType.COMMAND);
   }
 
-  public String value() throws ApplicationException, S2CNodeStoppedException, InterruptedException {
+  public String value() throws S2CNodeStoppedException, InterruptedException {
     ByteString byteStr = ByteString.copyFrom("GET".getBytes(StandardCharsets.UTF_8));
     StateRequestResponse response = sendToLeader(byteStr, StateRequestType.READ);
-    String result = null;
-    if (response.hasApplicationResult()) {
-      result = new String(response.getApplicationResult().getBody().toByteArray(), StandardCharsets.UTF_8);
-    } else {
-      handleInvalidReadResponse();
-    }
-    return result;
-  }
+    return new String(response.getApplicationResult()
+        .getBody()
+        .toByteArray(), StandardCharsets.UTF_8);
 
+  }
 }
