@@ -9,5 +9,3 @@
 A full-featured state machine replication (SMR) on S3 implementation in Java. Powered by virtual threads with a highly observable (Micrometer & structured logging) and lightweight core with minimal dependencies, S2C is designed for practical use in modern Java (21+) applications requiring reliable distributed coordination.
 
 See the [design document](docs/design-doc.md) for full protocol, architecture, and internals.
-
-S2C IS STILL IN ALPHA.
